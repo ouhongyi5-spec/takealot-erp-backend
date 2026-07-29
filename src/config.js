@@ -1,6 +1,22 @@
 const stripTrailingSlash = (value) => value.replace(/\/+$/, "");
 
+function getStores(env) {
+  const stores = [];
+  for (let index = 1; index <= 20; index += 1) {
+    const apiKey = env[`TAKEALOT_STORE_${index}_API_KEY`] || (index === 1 ? env.TAKEALOT_API_KEY : "");
+    if (!apiKey) continue;
+    stores.push({
+      id: `store_${index}`,
+      apiKey,
+      webhookSecret: env[`TAKEALOT_STORE_${index}_WEBHOOK_SECRET`] || (index === 1 ? env.TAKEALOT_WEBHOOK_SECRET || "" : ""),
+      fallbackName: env[`TAKEALOT_STORE_${index}_NAME`] || `店铺 ${index}`,
+    });
+  }
+  return stores;
+}
+
 export function getConfig(env = process.env) {
+  const stores = getStores(env);
   return {
     port: Number(env.PORT || 3000),
     apiBaseUrl: stripTrailingSlash(
@@ -10,12 +26,13 @@ export function getConfig(env = process.env) {
     webhookSecret: env.TAKEALOT_WEBHOOK_SECRET || "",
     frontendUrl: env.FRONTEND_URL || "",
     databaseUrl: env.DATABASE_URL || "",
+    stores,
   };
 }
 
 export function missingRequiredConfig(config) {
   return [
-    ["TAKEALOT_API_KEY", config.apiKey],
+    ["TAKEALOT_API_KEY", config.stores?.length || config.apiKey],
     ["TAKEALOT_WEBHOOK_SECRET", config.webhookSecret],
   ]
     .filter(([, value]) => !value)

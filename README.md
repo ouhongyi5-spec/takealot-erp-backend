@@ -14,12 +14,23 @@ FRONTEND_URL=https://takealot-erp.erosbloom.chatgpt.site
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 ```
 
+The existing `TAKEALOT_API_KEY` remains store 1. Add more stores with:
+
+```text
+TAKEALOT_STORE_2_API_KEY=<second store API key>
+TAKEALOT_STORE_2_WEBHOOK_SECRET=<second store webhook secret>
+TAKEALOT_STORE_3_API_KEY=<third store API key>
+```
+
+Store display names are loaded automatically from Takealot `/seller`.
+
 Do not commit real secrets to GitHub.
 
 ## Endpoints
 
 - `GET /health` — makes a real authenticated request to `/seller`
 - `GET /api/takealot/health`
+- `GET /api/takealot/stores` — list configured stores with API-provided names
 - `GET /api/takealot/offers`
 - `GET /api/takealot/sales`
 - `GET /api/takealot/inventory`

@@ -9,6 +9,13 @@ function getEventType(payload) {
   return payload?.event || payload?.event_type || payload?.type || null;
 }
 
+function storeConfig(config, req) {
+  const storeId = req.get("X-Store-ID") || req.query?.store_id || config.stores?.[0]?.id || "store_1";
+  const store = config.stores?.find((entry) => entry.id === storeId);
+  if (!store) return null;
+  return { ...config, apiKey: store.apiKey, webhookSecret: store.webhookSecret, storeId: store.id };
+}
+
 export function createApp({ config, pool = null }) {
   const app = express();
 
@@ -17,7 +24,7 @@ export function createApp({ config, pool = null }) {
     cors({
       origin: config.frontendUrl ? [config.frontendUrl] : false,
       methods: ["GET", "POST", "PATCH", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization"],
+      allowedHeaders: ["Content-Type", "Authorization", "X-Store-ID"],
     }),
   );
 
@@ -29,13 +36,15 @@ export function createApp({ config, pool = null }) {
     });
   });
 
-  app.get("/health", async (_req, res) => {
+  app.get("/health", async (req, res) => {
     const missing = missingRequiredConfig(config);
     if (missing.length) {
       return res.status(503).json({ status: "misconfigured", missing });
     }
 
-    const result = await takealotRequest(config, "seller");
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(503).json({ status: "misconfigured", missing: ["TAKEALOT_API_KEY"] });
+    const result = await takealotRequest(selected, "seller");
     return res.status(result.ok ? 200 : result.status).json({
       status: result.ok ? "connected" : "disconnected",
       takealotStatus: result.status,
@@ -46,23 +55,48 @@ export function createApp({ config, pool = null }) {
   });
 
   app.get("/api/takealot/health", async (_req, res) => {
-    const result = await takealotRequest(config, "seller");
+    const selected = storeConfig(config, _req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
+    const result = await takealotRequest(selected, "seller");
     return res.status(result.ok ? 200 : result.status).json({
       connected: result.ok,
       status: result.status,
       data: result.data,
+      store_id: selected.storeId,
     });
   });
 
+  app.get("/api/takealot/stores", async (_req, res) => {
+    const stores = await Promise.all((config.stores || []).map(async (store) => {
+      const result = await takealotRequest({ ...config, apiKey: store.apiKey }, "seller");
+      const seller = result.ok && result.data && typeof result.data === "object" ? result.data : {};
+      return {
+        id: store.id,
+        connected: result.ok,
+        display_name: seller.display_name || store.fallbackName,
+        legal_name: seller.legal_name || null,
+        seller_id: seller.seller_id || null,
+        logo: seller.logo || null,
+        error: result.ok ? null : result.data,
+      };
+    }));
+    return res.json({ stores, count: stores.length });
+  });
+
   app.get("/api/takealot/inventory", async (req, res) => {
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
     const params = new URLSearchParams(req.query);
+    params.delete("store_id");
     params.append("expands", "seller_warehouse_stock");
     params.append("expands", "takealot_warehouse_stock");
-    const result = await takealotRequest(config, "offers", { searchParams: params });
+    const result = await takealotRequest(selected, "offers", { searchParams: params });
     return res.status(result.status).json(result.data);
   });
 
   app.patch("/api/takealot/offers/:offerId", express.json({ limit: "100kb" }), async (req, res) => {
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
     const { offerId } = req.params;
     if (!/^\d+$/.test(offerId)) return res.status(400).json({ error: "Invalid offer ID" });
 
@@ -95,7 +129,7 @@ export function createApp({ config, pool = null }) {
 
     if (!Object.keys(body).length) return res.status(400).json({ error: "No supported update fields supplied" });
 
-    const result = await takealotRequest(config, "offers", {
+    const result = await takealotRequest(selected, "offers", {
       identifier: offerId,
       method: "PATCH",
       body,
@@ -104,23 +138,29 @@ export function createApp({ config, pool = null }) {
   });
 
   app.get("/api/takealot/:resource", async (req, res) => {
-    const result = await takealotRequest(config, req.params.resource, {
-      searchParams: new URLSearchParams(req.query),
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
+    const params = new URLSearchParams(req.query);
+    params.delete("store_id");
+    const result = await takealotRequest(selected, req.params.resource, {
+      searchParams: params,
     });
     return res.status(result.status).json(result.data);
   });
 
-  app.post("/api/takealot/sync", async (_req, res) => {
+  app.post("/api/takealot/sync", async (req, res) => {
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
     const results = {};
     for (const resource of ["offers", "sales"]) {
       const params = new URLSearchParams({ limit: "100", include_count: "true" });
-      const result = await takealotRequest(config, resource, { searchParams: params });
+      const result = await takealotRequest(selected, resource, { searchParams: params });
       results[resource] = result;
       await storeSyncRun(pool, resource, result);
     }
 
     const ok = Object.values(results).every((result) => result.ok);
-    return res.status(ok ? 200 : 502).json({ ok, results });
+    return res.status(ok ? 200 : 502).json({ ok, results, store_id: selected.storeId });
   });
 
   app.post(
