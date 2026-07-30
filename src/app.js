@@ -4,7 +4,7 @@ import { missingRequiredConfig } from "./config.js";
 import { storeSyncRun, storeWebhook } from "./database.js";
 import { takealotRequest } from "./takealot.js";
 import { verifyWebhookSignature } from "./webhook.js";
-import { getResaleResults, runResaleMonitor } from "./resale.js";
+import { getResaleResults, runResaleMonitor, startResaleMonitor } from "./resale.js";
 
 function getEventType(payload) {
   return payload?.event || payload?.event_type || payload?.type || null;
@@ -105,11 +105,8 @@ export function createApp({ config, pool = null }) {
     const selected = storeConfig(config, req);
     if (!selected) return res.status(404).json({ error: "Unknown store" });
     const store = config.stores.find((entry) => entry.id === selected.storeId);
-    try {
-      return res.json({ ok: true, ...(await runResaleMonitor({ config, pool, store })) });
-    } catch (error) {
-      return res.status(502).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
-    }
+    const job = startResaleMonitor({ config, pool, store });
+    return res.status(202).json({ ok: true, accepted: true, job });
   });
 
   app.patch("/api/takealot/offers/:offerId", express.json({ limit: "100kb" }), async (req, res) => {

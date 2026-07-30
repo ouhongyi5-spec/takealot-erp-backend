@@ -2,6 +2,7 @@ import { listResaleResults, saveResaleResult } from "./database.js";
 import { takealotRequest } from "./takealot.js";
 
 const memoryResults = new Map();
+const jobStates = new Map();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function getAllBuyableOffers(config) {
@@ -137,5 +138,25 @@ export async function getResaleResults(pool, storeId) {
     errors: items.filter((item) => item.status === "error").length,
     last_checked_at: items.reduce((latest, item) => String(item.checked_at) > latest ? String(item.checked_at) : latest, ""),
     database: pool ? "configured" : "memory_only",
+    job: jobStates.get(storeId) || { status: "idle" },
   };
+}
+
+export function startResaleMonitor(args) {
+  const existing = jobStates.get(args.store.id);
+  if (existing?.status === "running") return existing;
+  const started = { status: "running", started_at: new Date().toISOString() };
+  jobStates.set(args.store.id, started);
+  void runResaleMonitor(args)
+    .then((summary) => {
+      jobStates.set(args.store.id, { status: "completed", ...summary });
+    })
+    .catch((error) => {
+      jobStates.set(args.store.id, {
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+        finished_at: new Date().toISOString(),
+      });
+    });
+  return started;
 }
