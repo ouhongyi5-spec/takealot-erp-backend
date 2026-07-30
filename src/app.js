@@ -102,7 +102,6 @@ export function createApp({ config, pool = null }) {
   });
 
   app.post("/api/takealot/resale-monitor/run", async (req, res) => {
-    if (req.get("X-API-Key") !== config.apiKey) return res.status(401).json({ error: "Unauthorized" });
     const selected = storeConfig(config, req);
     if (!selected) return res.status(404).json({ error: "Unknown store" });
     const store = config.stores.find((entry) => entry.id === selected.storeId);
