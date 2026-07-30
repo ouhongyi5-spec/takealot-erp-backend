@@ -105,8 +105,11 @@ export async function saveResaleResult(pool, result) {
   await pool.query(
     `INSERT INTO resale_monitor_history
       (store_id,offer_id,status,own_rank,own_price,competitors,error,checked_at)
-     VALUES ($1,$2,$8,$9,$10,$11::jsonb,$12,$13)`,
-    values,
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)`,
+    [
+      result.store_id, result.offer_id, result.status, result.own_rank, result.own_price,
+      JSON.stringify(result.competitors || []), result.error || null, result.checked_at,
+    ],
   );
 }
 

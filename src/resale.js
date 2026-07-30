@@ -78,7 +78,7 @@ async function inspectOffer(store, offer) {
     return {
       ...base,
       product_url: product.desktop_href || base.product_url,
-      status: competitors.length ? "followed" : "clear",
+      status: ownIndex < 0 ? "error" : competitors.length ? "followed" : "clear",
       own_rank: ownIndex >= 0 ? ownIndex + 1 : null,
       own_price: ownIndex >= 0 ? sellers[ownIndex].price : Number(offer.selling_price || 0) || null,
       competitors,
