@@ -4,6 +4,7 @@ import { missingRequiredConfig } from "./config.js";
 import { storeSyncRun, storeWebhook } from "./database.js";
 import { takealotRequest } from "./takealot.js";
 import { verifyWebhookSignature } from "./webhook.js";
+import { getResaleResults, runResaleMonitor } from "./resale.js";
 
 function getEventType(payload) {
   return payload?.event || payload?.event_type || payload?.type || null;
@@ -92,6 +93,24 @@ export function createApp({ config, pool = null }) {
     params.append("expands", "takealot_warehouse_stock");
     const result = await takealotRequest(selected, "offers", { searchParams: params });
     return res.status(result.status).json(result.data);
+  });
+
+  app.get("/api/takealot/resale-monitor", async (req, res) => {
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
+    return res.json(await getResaleResults(pool, selected.storeId));
+  });
+
+  app.post("/api/takealot/resale-monitor/run", async (req, res) => {
+    if (req.get("X-API-Key") !== config.apiKey) return res.status(401).json({ error: "Unauthorized" });
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
+    const store = config.stores.find((entry) => entry.id === selected.storeId);
+    try {
+      return res.json({ ok: true, ...(await runResaleMonitor({ config, pool, store })) });
+    } catch (error) {
+      return res.status(502).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.patch("/api/takealot/offers/:offerId", express.json({ limit: "100kb" }), async (req, res) => {

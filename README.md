@@ -2,6 +2,13 @@
 
 Railway-ready Node.js backend for the Takealot ERP.
 
+## 跟卖监控
+
+- `GET /api/takealot/resale-monitor`：读取当前店铺最新检测结果。
+- `POST /api/takealot/resale-monitor/run`：立即检测全部可销售商品。
+- 服务会在北京时间每天上午 10:00 自动检测所有已配置店铺。
+- 请为后端配置 `DATABASE_URL`，用于持久保存最新结果和每日历史；未配置时仅保存在内存中。
+
 ## Railway variables
 
 Add these variables to the backend service:
