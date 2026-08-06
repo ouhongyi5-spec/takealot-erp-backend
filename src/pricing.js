@@ -61,7 +61,7 @@ export async function executePricingRule({ config, pool, rule, force = false }) 
       await sleep(delay);
       latestOffer = await offerDetails(config, store, rule.offer_id);
       try {
-        const checked = await inspectSingleOffer({ config, pool, store, offer: latestOffer, retryDelays: [0] });
+        const checked = await inspectSingleOffer({ config, pool, store, offer: latestOffer, retryDelays: [0], forceFresh: true });
         if (checked.status !== "error") {
           inspected = checked;
           publicConfirmed = Number(checked.own_price) === target;

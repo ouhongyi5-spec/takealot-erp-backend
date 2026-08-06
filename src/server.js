@@ -74,9 +74,23 @@ const pricingScheduler = setInterval(async () => {
   }
 }, 30_000);
 
+// Fast lane: products known to have competing sellers are refreshed every
+// ten minutes. Stable no-competitor/not-found products stay on the daily lane.
+let lastHotMonitorSlot = "";
+const hotMonitorScheduler = setInterval(() => {
+  const now = new Date();
+  const slot = `${now.toISOString().slice(0, 16).replace(/.$/, "0")}`;
+  if (slot === lastHotMonitorSlot) return;
+  lastHotMonitorSlot = slot;
+  for (const store of config.stores) {
+    startResaleMonitor({ config, pool, store, categories: ["followed"], trigger: "hot_10m" });
+  }
+}, 60_000);
+
 async function shutdown() {
   clearInterval(scheduler);
   clearInterval(pricingScheduler);
+  clearInterval(hotMonitorScheduler);
   server.close(async () => {
     await closeProductPageBrowser();
     if (pool) await pool.end();

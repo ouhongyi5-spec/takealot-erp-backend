@@ -109,9 +109,9 @@ export async function inspectOffer(store, offer, options = {}) {
   }
 }
 
-export async function inspectSingleOffer({ config, pool, store, offer, retryDelays = [0, 5_000, 15_000] }) {
+export async function inspectSingleOffer({ config, pool, store, offer, retryDelays = [0, 5_000, 15_000], forceFresh = false }) {
   const activeStore = await resolveActiveStore(config, store);
-  const result = await inspectOffer(activeStore, offer, { retryDelays, priority: "high", timeoutMs: 25_000 });
+  const result = await inspectOffer(activeStore, offer, { retryDelays, priority: "high", timeoutMs: 25_000, forceFresh });
   memoryResults.set(`${store.id}:${result.offer_id}`, result);
   await saveResaleResult(pool, result);
   return result;
@@ -158,7 +158,10 @@ export async function runResaleMonitor({ config, pool, store, categories = ["all
     memoryResults.set(`${store.id}:${result.offer_id}`, result);
     await saveResaleResult(pool, result);
     onProgress({ processed: index + 1, total: selectedOffers.length, current_offer_id: result.offer_id });
-    if (index + 1 < selectedOffers.length) await sleep(8_000);
+    // The public JSON product feed is lightweight. A small pacing gap avoids
+    // bursts while keeping a 2,000-product queue practical. Browser fallback
+    // already carries its own, much slower timeout and global queue.
+    if (index + 1 < selectedOffers.length) await sleep(500 + Math.floor(Math.random() * 500));
   }
   return {
     store_id: store.id,
