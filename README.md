@@ -28,8 +28,10 @@ Railway 会自动使用根目录的 `Dockerfile` 安装 Chrome 运行所需依�
 ## 跟卖监控
 
 - `GET /api/takealot/resale-monitor`：读取当前店铺最新检测结果。
-- `POST /api/takealot/resale-monitor/run`：立即检测全部可销售商品。
-- 服务会在北京时间每天上午 10:00 自动检测所有已配置店铺。
+- `GET /api/takealot/resale-monitor?job_only=1`：仅读取当前店铺任务进度，供 ERP 跨页面持续显示。
+- `POST /api/takealot/resale-monitor/run`：按所选范围立即检测；支持 `followed`、`clear`、`not_found`、`rate_limited`、`error`。
+- 服务会在北京时间每天上午 10:00 自动复查“无人跟卖”和“公开报价列表中未找到本店铺”的商品。
+- 同一店铺同时只允许一个检测任务；重复点击会返回正在运行的同一个任务，不会重新排队。
 - 请为后端配置 `DATABASE_URL`，用于持久保存最新结果和每日历史；未配置时仅保存在内存中。
 
 ## Railway variables

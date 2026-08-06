@@ -7,6 +7,15 @@ const jobStates = new Map();
 const sellerCache = new Map();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function resultCategory(item) {
+  if (item?.status === "followed") return "followed";
+  if (item?.status === "clear") return "clear";
+  const error = String(item?.error || "");
+  if (error.includes("公开报价列表中未找到本店铺")) return "not_found";
+  if (/429|请求受限/.test(error) || item?.stale) return "rate_limited";
+  return "error";
+}
+
 async function resolveActiveStore(config, store) {
   const cached = sellerCache.get(store.id);
   if (cached && cached.expiresAt > Date.now()) return cached.store;
@@ -108,7 +117,7 @@ export async function inspectSingleOffer({ config, pool, store, offer, retryDela
   return result;
 }
 
-export async function runResaleMonitor({ config, pool, store, onProgress = () => {} }) {
+export async function runResaleMonitor({ config, pool, store, categories = ["all"], trigger = "manual", onProgress = () => {} }) {
   const activeStore = await resolveActiveStore(config, store);
   const offers = await getAllBuyableOffers({ ...config, apiKey: store.apiKey });
   const previous = await listResaleResults(pool, store.id);
@@ -120,12 +129,16 @@ export async function runResaleMonitor({ config, pool, store, onProgress = () =>
     if (/429|请求受限/.test(String(item?.error || ""))) return 2;
     return 3;
   };
-  offers.sort((left, right) => priority(left) - priority(right));
+  const selectedCategories = new Set(Array.isArray(categories) && categories.length ? categories : ["all"]);
+  const selectedOffers = selectedCategories.has("all")
+    ? offers
+    : offers.filter((offer) => selectedCategories.has(resultCategory(previousByOffer.get(String(offer.offer_id)))));
+  selectedOffers.sort((left, right) => priority(left) - priority(right));
   const results = [];
-  onProgress({ processed: 0, total: offers.length });
+  onProgress({ processed: 0, total: selectedOffers.length, categories: [...selectedCategories], trigger });
 
-  for (let index = 0; index < offers.length; index += 1) {
-    let result = await inspectOffer(activeStore, offers[index]);
+  for (let index = 0; index < selectedOffers.length; index += 1) {
+    let result = await inspectOffer(activeStore, selectedOffers[index]);
     const prior = previousByOffer.get(String(result.offer_id));
     if (result.status === "error" && prior && Array.isArray(prior.competitors)) {
       result = {
@@ -140,12 +153,14 @@ export async function runResaleMonitor({ config, pool, store, onProgress = () =>
     memoryResults.set(`${store.id}:${result.offer_id}`, result);
     await saveResaleResult(pool, result);
     onProgress({ processed: index + 1, total: offers.length, current_offer_id: result.offer_id });
-    if (index + 1 < offers.length) await sleep(8_000);
+    if (index + 1 < selectedOffers.length) await sleep(8_000);
   }
   return {
     store_id: store.id,
     store_name: activeStore.displayName,
     checked: results.length,
+    categories: [...selectedCategories],
+    trigger,
     followed: results.filter((item) => item.status === "followed").length,
     clear: results.filter((item) => item.status === "clear").length,
     errors: results.filter((item) => item.status === "error").length,
@@ -174,7 +189,14 @@ export async function getResaleResults(pool, storeId) {
 export function startResaleMonitor(args) {
   const existing = jobStates.get(args.store.id);
   if (existing?.status === "running") return existing;
-  const started = { status: "running", started_at: new Date().toISOString() };
+  const started = {
+    status: "running",
+    started_at: new Date().toISOString(),
+    processed: 0,
+    total: 0,
+    categories: args.categories || ["all"],
+    trigger: args.trigger || "manual",
+  };
   jobStates.set(args.store.id, started);
   void runResaleMonitor({
     ...args,

@@ -1,6 +1,6 @@
 {
   "name": "takealot-erp-backend",
-  "version": "6.1.0",
+  "version": "6.2.0",
   "private": true,
   "description": "Railway backend for the Takealot ERP",
   "type": "module",

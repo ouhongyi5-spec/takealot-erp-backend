@@ -2,7 +2,7 @@ import "dotenv/config";
 import { createApp } from "./app.js";
 import { getConfig } from "./config.js";
 import { createDatabase, initializeDatabase } from "./database.js";
-import { runResaleMonitor } from "./resale.js";
+import { startResaleMonitor } from "./resale.js";
 import { closeProductPageBrowser } from "./product-page.js";
 import { runEnabledPricing } from "./pricing.js";
 
@@ -22,6 +22,7 @@ const server = app.listen(config.port, "0.0.0.0", () => {
 });
 
 let lastScheduledDate = "";
+let dailyStartedStores = new Set();
 let schedulerRunning = false;
 const scheduler = setInterval(async () => {
   const now = new Date();
@@ -32,11 +33,26 @@ const scheduler = setInterval(async () => {
     hour12: false,
   }).format(now));
   if (beijingHour !== 10 || lastScheduledDate === beijingDate || schedulerRunning) return;
+  if (dailyStartedStores.date !== beijingDate) {
+    dailyStartedStores = new Set();
+    dailyStartedStores.date = beijingDate;
+  }
   schedulerRunning = true;
   try {
-    for (const store of config.stores) await runResaleMonitor({ config, pool, store });
-    lastScheduledDate = beijingDate;
-    console.log(`Daily resale monitor completed for ${beijingDate}`);
+    // Daily maintenance only revisits stable no-competitor products and offers
+    // whose public seller list did not contain this store. Other categories
+    // remain available through the manual scoped check.
+    for (const store of config.stores) {
+      if (dailyStartedStores.has(store.id)) continue;
+      const job = startResaleMonitor({ config, pool, store, categories: ["clear", "not_found"], trigger: "daily" });
+      // If a manual scan is already running, retry this store on the next
+      // scheduler tick instead of silently losing today's maintenance scan.
+      if (job?.trigger === "daily") dailyStartedStores.add(store.id);
+    }
+    if (dailyStartedStores.size === config.stores.length) {
+      lastScheduledDate = beijingDate;
+      console.log(`Daily resale monitor started for ${beijingDate}`);
+    }
   } catch (error) {
     console.error("Daily resale monitor failed", error);
   } finally {

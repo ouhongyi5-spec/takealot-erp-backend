@@ -99,14 +99,20 @@ export function createApp({ config, pool = null }) {
   app.get("/api/takealot/resale-monitor", async (req, res) => {
     const selected = storeConfig(config, req);
     if (!selected) return res.status(404).json({ error: "Unknown store" });
-    return res.json(await getResaleResults(pool, selected.storeId));
+    const result = await getResaleResults(pool, selected.storeId);
+    return res.json(req.query?.job_only === "1" ? { job: result.job } : result);
   });
 
-  app.post("/api/takealot/resale-monitor/run", async (req, res) => {
+  app.post("/api/takealot/resale-monitor/run", express.json({ limit: "50kb" }), async (req, res) => {
     const selected = storeConfig(config, req);
     if (!selected) return res.status(404).json({ error: "Unknown store" });
     const store = config.stores.find((entry) => entry.id === selected.storeId);
-    const job = startResaleMonitor({ config, pool, store });
+    const allowed = new Set(["all", "followed", "clear", "not_found", "rate_limited", "error"]);
+    const requested = Array.isArray(req.body?.categories) ? req.body.categories.map(String).filter((item) => allowed.has(item)) : ["all"];
+    const categories = requested.length ? requested : ["all"];
+    const current = (await getResaleResults(pool, selected.storeId)).job;
+    if (current?.status === "running") return res.status(202).json({ ok: true, accepted: false, already_running: true, job: current });
+    const job = startResaleMonitor({ config, pool, store, categories, trigger: "manual" });
     return res.status(202).json({ ok: true, accepted: true, job });
   });
 
