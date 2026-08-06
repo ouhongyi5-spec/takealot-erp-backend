@@ -138,7 +138,12 @@ export async function runResaleMonitor({ config, pool, store, categories = ["all
   onProgress({ processed: 0, total: selectedOffers.length, categories: [...selectedCategories], trigger });
 
   for (let index = 0; index < selectedOffers.length; index += 1) {
-    let result = await inspectOffer(activeStore, selectedOffers[index]);
+    // Full-store scans never wait minutes on one blocked product. Record the
+    // failure and move on; a later scheduled/manual pass can retry it.
+    let result = await inspectOffer(activeStore, selectedOffers[index], {
+      retryDelays: [0],
+      timeoutMs: 25_000,
+    });
     const prior = previousByOffer.get(String(result.offer_id));
     if (result.status === "error" && prior && Array.isArray(prior.competitors)) {
       result = {
@@ -152,7 +157,7 @@ export async function runResaleMonitor({ config, pool, store, categories = ["all
     results.push(result);
     memoryResults.set(`${store.id}:${result.offer_id}`, result);
     await saveResaleResult(pool, result);
-    onProgress({ processed: index + 1, total: offers.length, current_offer_id: result.offer_id });
+    onProgress({ processed: index + 1, total: selectedOffers.length, current_offer_id: result.offer_id });
     if (index + 1 < selectedOffers.length) await sleep(8_000);
   }
   return {

@@ -5,6 +5,13 @@ const highPriorityQueue = [];
 const normalPriorityQueue = [];
 let queueRunning = false;
 
+async function resetBrowser() {
+  const pending = browserPromise;
+  browserPromise = undefined;
+  if (!pending) return;
+  void pending.then((instance) => instance.close()).catch(() => {});
+}
+
 async function browser() {
   if (!browserPromise) {
     browserPromise = puppeteer.launch({
@@ -121,8 +128,21 @@ async function drainQueue() {
     while (highPriorityQueue.length || normalPriorityQueue.length) {
       const task = highPriorityQueue.shift() || normalPriorityQueue.shift();
       try {
-        task.resolve(await readProductPageOnce(task.productlineId, task.options));
+        const hardTimeoutMs = (Number(task.options.timeoutMs) || 35_000) + 10_000;
+        let timer;
+        const hardTimeout = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("商品页面检查硬超时，已自动跳过")), hardTimeoutMs);
+        });
+        try {
+          task.resolve(await Promise.race([
+            readProductPageOnce(task.productlineId, task.options),
+            hardTimeout,
+          ]));
+        } finally {
+          clearTimeout(timer);
+        }
       } catch (error) {
+        if (/硬超时/.test(error instanceof Error ? error.message : String(error))) await resetBrowser();
         task.reject(error);
       }
     }
@@ -133,7 +153,7 @@ async function drainQueue() {
 }
 
 export async function readProductPage(productlineId, options = {}) {
-  const retryDelays = options.retryDelays || [0, 60_000, 300_000, 900_000];
+  const retryDelays = options.retryDelays || [0];
   let lastError;
   for (const delay of retryDelays) {
     if (delay) await wait(delay);

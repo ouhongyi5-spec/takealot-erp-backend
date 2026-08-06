@@ -25,6 +25,8 @@ Railway-ready Node.js backend for the Takealot ERP.
 
 Railway 会自动使用根目录的 `Dockerfile` 安装 Chrome 运行所需依赖。首次构建耗时会比旧版本更长，属于正常现象。
 
+V6.3 起，整店扫描对每个商品设置硬超时，受限或超时后会立即保存异常并继续下一件，不再在同一次任务内等待 1/5/15 分钟重试。后续定时或手动任务会再次复查，避免单个页面令整店进度长期停滞。
+
 ## 跟卖监控
 
 - `GET /api/takealot/resale-monitor`：读取当前店铺最新检测结果。
