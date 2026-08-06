@@ -4,7 +4,18 @@ import { readProductPage } from "./product-page.js";
 
 const memoryResults = new Map();
 const jobStates = new Map();
+const sellerCache = new Map();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function resolveActiveStore(config, store) {
+  const cached = sellerCache.get(store.id);
+  if (cached && cached.expiresAt > Date.now()) return cached.store;
+  const sellerResponse = await takealotRequest({ ...config, apiKey: store.apiKey }, "seller");
+  if (!sellerResponse.ok) throw new Error(`Seller request failed (${sellerResponse.status})`);
+  const activeStore = { ...store, sellerId: sellerResponse.data?.seller_id, displayName: sellerResponse.data?.display_name };
+  sellerCache.set(store.id, { store: activeStore, expiresAt: Date.now() + 10 * 60_000 });
+  return activeStore;
+}
 
 async function getAllBuyableOffers(config) {
   const items = [];
@@ -90,19 +101,15 @@ export async function inspectOffer(store, offer, options = {}) {
 }
 
 export async function inspectSingleOffer({ config, pool, store, offer, retryDelays = [0, 5_000, 15_000] }) {
-  const sellerResponse = await takealotRequest({ ...config, apiKey: store.apiKey }, "seller");
-  if (!sellerResponse.ok) throw new Error(`Seller request failed (${sellerResponse.status})`);
-  const activeStore = { ...store, sellerId: sellerResponse.data?.seller_id, displayName: sellerResponse.data?.display_name };
-  const result = await inspectOffer(activeStore, offer, { retryDelays });
+  const activeStore = await resolveActiveStore(config, store);
+  const result = await inspectOffer(activeStore, offer, { retryDelays, priority: "high", timeoutMs: 25_000 });
   memoryResults.set(`${store.id}:${result.offer_id}`, result);
   await saveResaleResult(pool, result);
   return result;
 }
 
 export async function runResaleMonitor({ config, pool, store, onProgress = () => {} }) {
-  const sellerResponse = await takealotRequest({ ...config, apiKey: store.apiKey }, "seller");
-  if (!sellerResponse.ok) throw new Error(`Seller request failed (${sellerResponse.status})`);
-  const activeStore = { ...store, sellerId: sellerResponse.data?.seller_id, displayName: sellerResponse.data?.display_name };
+  const activeStore = await resolveActiveStore(config, store);
   const offers = await getAllBuyableOffers({ ...config, apiKey: store.apiKey });
   const previous = await listResaleResults(pool, store.id);
   const previousByOffer = new Map(previous.map((item) => [String(item.offer_id), item]));
@@ -133,7 +140,7 @@ export async function runResaleMonitor({ config, pool, store, onProgress = () =>
     memoryResults.set(`${store.id}:${result.offer_id}`, result);
     await saveResaleResult(pool, result);
     onProgress({ processed: index + 1, total: offers.length, current_offer_id: result.offer_id });
-    if (index + 1 < offers.length) await sleep(15_000);
+    if (index + 1 < offers.length) await sleep(8_000);
   }
   return {
     store_id: store.id,

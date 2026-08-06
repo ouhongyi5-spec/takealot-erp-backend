@@ -32,6 +32,7 @@ export async function executePricingRule({ config, pool, rule, force = false }) 
     if (!store) throw new Error("店铺配置不存在");
     const offer = await offerDetails(config, store, rule.offer_id);
     let inspected = await inspectSingleOffer({ config, pool, store, offer, retryDelays: [0, 4_000] });
+    if (inspected.status === "error") throw new Error(inspected.error || "公开报价检查失败");
     const current = Number(inspected.own_price ?? offer.selling_price);
     if (!Number.isFinite(current)) throw new Error("无法取得本店最新售价");
     if (!force && inspected.own_rank === 1) {
@@ -54,17 +55,29 @@ export async function executePricingRule({ config, pool, rule, force = false }) 
     if (!patch.ok) throw new Error(`Takealot 调价失败 (${patch.status}): ${JSON.stringify(patch.data).slice(0, 180)}`);
 
     // Takealot 商品页的公开报价存在传播延迟；短轮询确认，最终结果写回监控表。
+    let publicConfirmed = false;
+    let latestOffer = offer;
     for (const delay of [3_000, 7_000, 15_000]) {
       await sleep(delay);
-      const latestOffer = await offerDetails(config, store, rule.offer_id);
-      inspected = await inspectSingleOffer({ config, pool, store, offer: latestOffer, retryDelays: [0] });
-      if (Number(inspected.own_price) === target || Number(latestOffer.selling_price) === target) break;
+      latestOffer = await offerDetails(config, store, rule.offer_id);
+      try {
+        const checked = await inspectSingleOffer({ config, pool, store, offer: latestOffer, retryDelays: [0] });
+        if (checked.status !== "error") {
+          inspected = checked;
+          publicConfirmed = Number(checked.own_price) === target;
+        }
+      } catch {
+        // The official offer endpoint remains the source of truth for the
+        // completed write; the next scheduled check will refresh public rank.
+      }
+      if (publicConfirmed || Number(latestOffer.selling_price) === target) break;
     }
-    const confirmedPrice = Number(inspected.own_price) || target;
+    const officialConfirmed = Number(latestOffer.selling_price) === target;
+    const confirmedPrice = officialConfirmed ? target : (Number(inspected.own_price) || target);
     const outcome = {
-      offer_id: rule.offer_id, status: "adjusted", adjusted: true, from: current, to: target,
+      offer_id: rule.offer_id, status: publicConfirmed ? "adjusted" : "adjusted_pending_confirmation", adjusted: true, from: current, to: target,
       price: confirmedPrice, rank: inspected.own_rank, competitors: inspected.competitors, item: inspected,
-      message: `R ${current} → R ${target}；复查排名 ${inspected.own_rank ?? "待更新"}`,
+      message: `R ${current} → R ${target}；${publicConfirmed ? `复查排名 ${inspected.own_rank ?? "待更新"}` : "官方报价已更新，公开排名等待同步"}`,
     };
     await updatePricingRuleResult(pool, rule, outcome);
     return outcome;

@@ -1,12 +1,14 @@
 import puppeteer from "puppeteer";
 
 let browserPromise;
+const highPriorityQueue = [];
+const normalPriorityQueue = [];
+let queueRunning = false;
 
 async function browser() {
   if (!browserPromise) {
     browserPromise = puppeteer.launch({
       headless: true,
-      userDataDir: "/tmp/takealot-erp-chrome",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -30,12 +32,18 @@ async function browser() {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function readProductPageOnce(productlineId) {
+async function readProductPageOnce(productlineId, options = {}) {
+  const timeoutMs = Number(options.timeoutMs) || 35_000;
   const instance = await browser();
   const page = await instance.newPage();
   try {
     await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36");
     await page.setViewport({ width: 1365, height: 768 });
+    await page.setCacheEnabled(false);
+    await page.setExtraHTTPHeaders({
+      "Cache-Control": "no-cache, no-store, max-age=0",
+      Pragma: "no-cache",
+    });
     await page.setRequestInterception(true);
     page.on("request", (request) => {
       if (["image", "font", "media"].includes(request.resourceType())) request.abort();
@@ -51,7 +59,7 @@ async function readProductPageOnce(productlineId) {
         if (settled) return;
         settled = true;
         reject(new Error("商品页面报价加载超时"));
-      }, 35_000);
+      }, timeoutMs);
       resolveProduct = (value) => {
         if (settled) return;
         settled = true;
@@ -67,6 +75,9 @@ async function readProductPageOnce(productlineId) {
     });
     page.on("response", async (response) => {
       if (!response.url().includes(`/product-details/PLID${productlineId}`)) return;
+      // Chromium can still surface an old conditional response. Ignore it and
+      // keep waiting for the cache-busted 200 response instead of failing.
+      if (response.status() === 304) return;
       if (response.status() === 429) return rejectProduct?.(new Error("商品页面请求受限 429"));
       try {
         if (!response.ok()) throw new Error(`商品页面报价请求 ${response.status()}`);
@@ -77,9 +88,9 @@ async function readProductPageOnce(productlineId) {
     });
 
     try {
-      await page.goto(`https://www.takealot.com/-/PLID${productlineId}`, {
+      await page.goto(`https://www.takealot.com/-/PLID${productlineId}?erp_refresh=${Date.now()}`, {
         waitUntil: "domcontentloaded",
-        timeout: 35_000,
+        timeout: timeoutMs,
       });
       return await productResponse;
     } catch (error) {
@@ -94,13 +105,42 @@ async function readProductPageOnce(productlineId) {
   }
 }
 
+function enqueueRead(productlineId, options) {
+  return new Promise((resolve, reject) => {
+    const task = { productlineId, options, resolve, reject };
+    if (options.priority === "high") highPriorityQueue.push(task);
+    else normalPriorityQueue.push(task);
+    void drainQueue();
+  });
+}
+
+async function drainQueue() {
+  if (queueRunning) return;
+  queueRunning = true;
+  try {
+    while (highPriorityQueue.length || normalPriorityQueue.length) {
+      const task = highPriorityQueue.shift() || normalPriorityQueue.shift();
+      try {
+        task.resolve(await readProductPageOnce(task.productlineId, task.options));
+      } catch (error) {
+        task.reject(error);
+      }
+    }
+  } finally {
+    queueRunning = false;
+    if (highPriorityQueue.length || normalPriorityQueue.length) void drainQueue();
+  }
+}
+
 export async function readProductPage(productlineId, options = {}) {
   const retryDelays = options.retryDelays || [0, 60_000, 300_000, 900_000];
   let lastError;
   for (const delay of retryDelays) {
     if (delay) await wait(delay);
     try {
-      return await readProductPageOnce(productlineId);
+      // Each attempt is queued separately, so an automatic-pricing check can
+      // jump ahead while a normal full scan is waiting for its retry.
+      return await enqueueRead(productlineId, options);
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
