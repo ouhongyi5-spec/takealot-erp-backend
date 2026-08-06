@@ -1,5 +1,13 @@
 # Takealot ERP Backend
 
+## V6 自动竞价
+
+- 每个商品可启用 5 或 10 分钟自动检查。
+- 仅在本店排名不为第 1 且存在有效竞店报价时调价。
+- 强制执行最低价、最高价、低于竞品金额与单次最大调价保护。
+- 调价后自动复查公开商品页，并把最新售价、排名和竞店写回 PostgreSQL。
+- Railway 进程独立调度，关闭 ERP 网页后仍会运行。
+
 Railway-ready Node.js backend for the Takealot ERP.
 
 ## 跟卖监控采集

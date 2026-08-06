@@ -5,6 +5,7 @@ import { storeSyncRun, storeWebhook } from "./database.js";
 import { takealotRequest } from "./takealot.js";
 import { verifyWebhookSignature } from "./webhook.js";
 import { getResaleResults, runResaleMonitor, startResaleMonitor } from "./resale.js";
+import { listPricingRules, pricingJob, savePricingRule, startEnabledPricing } from "./pricing.js";
 
 function getEventType(payload) {
   return payload?.event || payload?.event_type || payload?.type || null;
@@ -24,7 +25,7 @@ export function createApp({ config, pool = null }) {
   app.use(
     cors({
       origin: config.frontendUrl ? [config.frontendUrl] : false,
-      methods: ["GET", "POST", "PATCH", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "PATCH", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-Store-ID"],
     }),
   );
@@ -107,6 +108,49 @@ export function createApp({ config, pool = null }) {
     const store = config.stores.find((entry) => entry.id === selected.storeId);
     const job = startResaleMonitor({ config, pool, store });
     return res.status(202).json({ ok: true, accepted: true, job });
+  });
+
+  app.get("/api/takealot/pricing-rules", async (req, res) => {
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
+    try {
+      return res.json({ ok: true, items: await listPricingRules(pool, selected.storeId), job: pricingJob(selected.storeId), database: pool ? "configured" : "not_configured" });
+    } catch (error) {
+      return res.status(502).json({ error: error instanceof Error ? error.message : "竞价规则加载失败" });
+    }
+  });
+
+  app.put("/api/takealot/pricing-rules", express.json({ limit: "100kb" }), async (req, res) => {
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
+    const offerId = String(req.body?.offer_id || "");
+    const intervalMinutes = Number(req.body?.interval_minutes ?? 10);
+    const values = {
+      min_price: Number(req.body?.min_price), max_price: Number(req.body?.max_price),
+      undercut_by: Number(req.body?.undercut_by ?? 1), max_change: Number(req.body?.max_change ?? 20),
+    };
+    if (!/^\d+$/.test(offerId)) return res.status(400).json({ error: "报价 ID 无效" });
+    if (![5, 10].includes(intervalMinutes)) return res.status(400).json({ error: "检测间隔只可选择 5 或 10 分钟" });
+    if (!Object.values(values).every(Number.isFinite) || values.min_price < 1 || values.max_price < values.min_price || values.undercut_by < 0 || values.max_change < 1) {
+      return res.status(400).json({ error: "请正确设置最低价、最高价、目标差价和单次最大调价" });
+    }
+    try {
+      const rule = await savePricingRule(pool, { store_id: selected.storeId, offer_id: offerId, enabled: Boolean(req.body?.enabled), interval_minutes: intervalMinutes, ...values });
+      return res.json({ ok: true, item: rule });
+    } catch (error) {
+      return res.status(502).json({ error: error instanceof Error ? error.message : "竞价规则保存失败" });
+    }
+  });
+
+  app.post("/api/takealot/pricing-rules/run", async (req, res) => {
+    const selected = storeConfig(config, req);
+    if (!selected) return res.status(404).json({ error: "Unknown store" });
+    try {
+      const job = startEnabledPricing({ config, pool, storeId: selected.storeId });
+      return res.status(202).json({ ok: true, accepted: true, job });
+    } catch (error) {
+      return res.status(502).json({ error: error instanceof Error ? error.message : "动态竞价执行失败" });
+    }
   });
 
   app.patch("/api/takealot/offers/:offerId", express.json({ limit: "100kb" }), async (req, res) => {

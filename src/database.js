@@ -63,6 +63,26 @@ export async function initializeDatabase(pool) {
     );
     CREATE INDEX IF NOT EXISTS resale_history_store_checked_idx
       ON resale_monitor_history (store_id, checked_at DESC);
+
+    CREATE TABLE IF NOT EXISTS pricing_rules (
+      store_id TEXT NOT NULL,
+      offer_id BIGINT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      interval_minutes INTEGER NOT NULL DEFAULT 10,
+      min_price INTEGER NOT NULL,
+      max_price INTEGER NOT NULL,
+      undercut_by INTEGER NOT NULL DEFAULT 1,
+      max_change INTEGER NOT NULL DEFAULT 20,
+      next_run_at TIMESTAMPTZ,
+      last_run_at TIMESTAMPTZ,
+      last_result TEXT,
+      last_status TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (store_id, offer_id),
+      CHECK (interval_minutes IN (5, 10))
+    );
+    CREATE INDEX IF NOT EXISTS pricing_rules_due_idx
+      ON pricing_rules (enabled, next_run_at);
   `);
 }
 
@@ -130,4 +150,53 @@ export async function listResaleResults(pool, storeId) {
     [storeId],
   );
   return result.rows;
+}
+
+export async function listPricingRules(pool, storeId) {
+  if (!pool) return [];
+  const result = await pool.query(
+    `SELECT store_id,offer_id,enabled,interval_minutes,min_price,max_price,undercut_by,max_change,
+            next_run_at,last_run_at,last_result,last_status,updated_at
+       FROM pricing_rules WHERE store_id=$1 ORDER BY updated_at DESC`,
+    [storeId],
+  );
+  return result.rows;
+}
+
+export async function savePricingRule(pool, rule) {
+  if (!pool) throw new Error("PostgreSQL 未配置，无法启用后台自动竞价");
+  const result = await pool.query(
+    `INSERT INTO pricing_rules
+       (store_id,offer_id,enabled,interval_minutes,min_price,max_price,undercut_by,max_change,next_run_at,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,CASE WHEN $3 THEN NOW() ELSE NULL END,NOW())
+     ON CONFLICT (store_id,offer_id) DO UPDATE SET
+       enabled=excluded.enabled,interval_minutes=excluded.interval_minutes,min_price=excluded.min_price,
+       max_price=excluded.max_price,undercut_by=excluded.undercut_by,max_change=excluded.max_change,
+       next_run_at=CASE WHEN excluded.enabled THEN LEAST(COALESCE(pricing_rules.next_run_at,NOW()),NOW()) ELSE NULL END,
+       updated_at=NOW()
+     RETURNING *`,
+    [rule.store_id, rule.offer_id, rule.enabled, rule.interval_minutes, rule.min_price, rule.max_price, rule.undercut_by, rule.max_change],
+  );
+  return result.rows[0];
+}
+
+export async function duePricingRules(pool, limit = 20) {
+  if (!pool) return [];
+  const result = await pool.query(
+    `SELECT * FROM pricing_rules
+      WHERE enabled=TRUE AND COALESCE(next_run_at,NOW()) <= NOW()
+      ORDER BY COALESCE(next_run_at,updated_at) ASC LIMIT $1`,
+    [limit],
+  );
+  return result.rows;
+}
+
+export async function updatePricingRuleResult(pool, rule, result) {
+  if (!pool) return;
+  await pool.query(
+    `UPDATE pricing_rules SET last_run_at=NOW(),last_status=$1,last_result=$2,
+       next_run_at=NOW() + make_interval(mins => interval_minutes),updated_at=NOW()
+     WHERE store_id=$3 AND offer_id=$4`,
+    [result.status, result.message, rule.store_id, rule.offer_id],
+  );
 }

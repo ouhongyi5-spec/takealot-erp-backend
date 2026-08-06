@@ -4,6 +4,7 @@ import { getConfig } from "./config.js";
 import { createDatabase, initializeDatabase } from "./database.js";
 import { runResaleMonitor } from "./resale.js";
 import { closeProductPageBrowser } from "./product-page.js";
+import { runEnabledPricing } from "./pricing.js";
 
 const config = getConfig();
 const pool = createDatabase(config.databaseUrl);
@@ -43,8 +44,23 @@ const scheduler = setInterval(async () => {
   }
 }, 60_000);
 
+let pricingSchedulerRunning = false;
+const pricingScheduler = setInterval(async () => {
+  if (pricingSchedulerRunning || !pool) return;
+  pricingSchedulerRunning = true;
+  try {
+    const result = await runEnabledPricing({ config, pool, dueOnly: true });
+    if (result.results.length) console.log(`Automatic pricing checked ${result.results.length}; adjusted ${result.adjusted}`);
+  } catch (error) {
+    console.error("Automatic pricing scheduler failed", error);
+  } finally {
+    pricingSchedulerRunning = false;
+  }
+}, 30_000);
+
 async function shutdown() {
   clearInterval(scheduler);
+  clearInterval(pricingScheduler);
   server.close(async () => {
     await closeProductPageBrowser();
     if (pool) await pool.end();

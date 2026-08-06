@@ -40,7 +40,7 @@ function normalizeSeller(seller, price, position) {
   };
 }
 
-async function inspectOffer(store, offer) {
+export async function inspectOffer(store, offer, options = {}) {
   const checkedAt = new Date().toISOString();
   const productlineId = Number(offer.productline_id);
   const base = {
@@ -56,7 +56,7 @@ async function inspectOffer(store, offer) {
   if (!productlineId) return { ...base, status: "error", own_rank: null, own_price: null, competitors: [], error: "缺少 Productline ID" };
 
   try {
-    const product = await readProductPage(productlineId);
+    const product = await readProductPage(productlineId, options);
     const sellers = [];
     if (product.seller_detail) {
       const selected = product.buybox?.items?.find((item) => item.is_selected) || product.buybox?.items?.[0];
@@ -87,6 +87,16 @@ async function inspectOffer(store, offer) {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export async function inspectSingleOffer({ config, pool, store, offer, retryDelays = [0, 5_000, 15_000] }) {
+  const sellerResponse = await takealotRequest({ ...config, apiKey: store.apiKey }, "seller");
+  if (!sellerResponse.ok) throw new Error(`Seller request failed (${sellerResponse.status})`);
+  const activeStore = { ...store, sellerId: sellerResponse.data?.seller_id, displayName: sellerResponse.data?.display_name };
+  const result = await inspectOffer(activeStore, offer, { retryDelays });
+  memoryResults.set(`${store.id}:${result.offer_id}`, result);
+  await saveResaleResult(pool, result);
+  return result;
 }
 
 export async function runResaleMonitor({ config, pool, store, onProgress = () => {} }) {

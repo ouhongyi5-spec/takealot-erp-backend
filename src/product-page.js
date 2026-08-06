@@ -94,8 +94,8 @@ async function readProductPageOnce(productlineId) {
   }
 }
 
-export async function readProductPage(productlineId) {
-  const retryDelays = [0, 60_000, 300_000, 900_000];
+export async function readProductPage(productlineId, options = {}) {
+  const retryDelays = options.retryDelays || [0, 60_000, 300_000, 900_000];
   let lastError;
   for (const delay of retryDelays) {
     if (delay) await wait(delay);
