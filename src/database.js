@@ -118,9 +118,15 @@ export async function listResaleResults(pool, storeId) {
   const result = await pool.query(
     `SELECT store_id,offer_id,productline_id,sku,title,image_url,product_url,status,
             own_rank,own_price,competitors,error,checked_at
-       FROM resale_monitor_results
+      FROM resale_monitor_results
       WHERE store_id=$1
-      ORDER BY (status='followed') DESC, own_rank DESC NULLS FIRST, checked_at DESC`,
+      ORDER BY CASE
+        WHEN status='followed' THEN 0
+        WHEN status='clear' THEN 1
+        WHEN status='error' AND (error ILIKE '%429%' OR error LIKE '%请求受限%') THEN 2
+        ELSE 3
+      END,
+      checked_at DESC`,
     [storeId],
   );
   return result.rows;

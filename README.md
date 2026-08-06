@@ -2,6 +2,12 @@
 
 Railway-ready Node.js backend for the Takealot ERP.
 
+## 跟卖监控采集
+
+监控任务通过无头浏览器逐个打开 Takealot 商品页，读取页面实际加载的公开报价，默认每件商品间隔 15 秒。扫描顺序为：跟卖中、无人跟卖、请求受限、检查异常。若临时请求受限，数据库会保留上一次成功获取的竞争店铺和排名；ERP 改价仍只通过官方 Seller API 执行。
+
+Railway 会自动使用根目录的 `Dockerfile` 安装 Chrome 运行所需依赖。首次构建耗时会比旧版本更长，属于正常现象。
+
 ## 跟卖监控
 
 - `GET /api/takealot/resale-monitor`：读取当前店铺最新检测结果。

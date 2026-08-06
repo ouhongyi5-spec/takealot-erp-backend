@@ -3,6 +3,7 @@ import { createApp } from "./app.js";
 import { getConfig } from "./config.js";
 import { createDatabase, initializeDatabase } from "./database.js";
 import { runResaleMonitor } from "./resale.js";
+import { closeProductPageBrowser } from "./product-page.js";
 
 const config = getConfig();
 const pool = createDatabase(config.databaseUrl);
@@ -45,6 +46,7 @@ const scheduler = setInterval(async () => {
 async function shutdown() {
   clearInterval(scheduler);
   server.close(async () => {
+    await closeProductPageBrowser();
     if (pool) await pool.end();
     process.exit(0);
   });

@@ -1,5 +1,6 @@
 import { listResaleResults, saveResaleResult } from "./database.js";
 import { takealotRequest } from "./takealot.js";
+import { readProductPage } from "./product-page.js";
 
 const memoryResults = new Map();
 const jobStates = new Map();
@@ -55,15 +56,7 @@ async function inspectOffer(store, offer) {
   if (!productlineId) return { ...base, status: "error", own_rank: null, own_price: null, competitors: [], error: "缺少 Productline ID" };
 
   try {
-    const response = await fetch(
-      `https://api.takealot.com/rest/v-1-18-0/product-details/PLID${productlineId}?platform=desktop`,
-      {
-        headers: { Accept: "application/json", "User-Agent": "TakealotERP/1.0" },
-        signal: AbortSignal.timeout(20000),
-      },
-    );
-    if (!response.ok) throw new Error(`Public product API ${response.status}`);
-    const product = await response.json();
+    const product = await readProductPage(productlineId);
     const sellers = [];
     if (product.seller_detail) {
       const selected = product.buybox?.items?.find((item) => item.is_selected) || product.buybox?.items?.[0];
@@ -96,22 +89,41 @@ async function inspectOffer(store, offer) {
   }
 }
 
-export async function runResaleMonitor({ config, pool, store }) {
+export async function runResaleMonitor({ config, pool, store, onProgress = () => {} }) {
   const sellerResponse = await takealotRequest({ ...config, apiKey: store.apiKey }, "seller");
   if (!sellerResponse.ok) throw new Error(`Seller request failed (${sellerResponse.status})`);
   const activeStore = { ...store, sellerId: sellerResponse.data?.seller_id, displayName: sellerResponse.data?.display_name };
   const offers = await getAllBuyableOffers({ ...config, apiKey: store.apiKey });
+  const previous = await listResaleResults(pool, store.id);
+  const previousByOffer = new Map(previous.map((item) => [String(item.offer_id), item]));
+  const priority = (offer) => {
+    const item = previousByOffer.get(String(offer.offer_id));
+    if (item?.status === "followed") return 0;
+    if (item?.status === "clear") return 1;
+    if (/429|请求受限/.test(String(item?.error || ""))) return 2;
+    return 3;
+  };
+  offers.sort((left, right) => priority(left) - priority(right));
   const results = [];
+  onProgress({ processed: 0, total: offers.length });
 
-  for (let index = 0; index < offers.length; index += 3) {
-    const group = offers.slice(index, index + 3);
-    const inspected = await Promise.all(group.map((offer) => inspectOffer(activeStore, offer)));
-    for (const result of inspected) {
-      results.push(result);
-      memoryResults.set(`${store.id}:${result.offer_id}`, result);
-      await saveResaleResult(pool, result);
+  for (let index = 0; index < offers.length; index += 1) {
+    let result = await inspectOffer(activeStore, offers[index]);
+    const prior = previousByOffer.get(String(result.offer_id));
+    if (result.status === "error" && prior && Array.isArray(prior.competitors)) {
+      result = {
+        ...result,
+        own_rank: prior.own_rank,
+        competitors: prior.competitors,
+        last_successful_check_at: prior.checked_at,
+        stale: true,
+      };
     }
-    if (index + 3 < offers.length) await sleep(350);
+    results.push(result);
+    memoryResults.set(`${store.id}:${result.offer_id}`, result);
+    await saveResaleResult(pool, result);
+    onProgress({ processed: index + 1, total: offers.length, current_offer_id: result.offer_id });
+    if (index + 1 < offers.length) await sleep(15_000);
   }
   return {
     store_id: store.id,
@@ -147,7 +159,12 @@ export function startResaleMonitor(args) {
   if (existing?.status === "running") return existing;
   const started = { status: "running", started_at: new Date().toISOString() };
   jobStates.set(args.store.id, started);
-  void runResaleMonitor(args)
+  void runResaleMonitor({
+    ...args,
+    onProgress(progress) {
+      jobStates.set(args.store.id, { ...started, ...progress });
+    },
+  })
     .then((summary) => {
       jobStates.set(args.store.id, { status: "completed", ...summary });
     })
