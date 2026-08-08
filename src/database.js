@@ -83,7 +83,67 @@ export async function initializeDatabase(pool) {
     );
     CREATE INDEX IF NOT EXISTS pricing_rules_due_idx
       ON pricing_rules (enabled, next_run_at);
+
+    CREATE TABLE IF NOT EXISTS market_categories (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      name_zh TEXT,
+      seed_plid TEXT NOT NULL,
+      category_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+      total_found INTEGER NOT NULL DEFAULT 0,
+      next_cursor TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      collected_count INTEGER NOT NULL DEFAULT 0,
+      last_collected_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      next_update_at TIMESTAMPTZ,
+      last_error TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS market_categories_due_idx
+      ON market_categories (status, next_update_at, updated_at);
+
+    CREATE TABLE IF NOT EXISTS market_products (
+      plid TEXT PRIMARY KEY,
+      tsin TEXT,
+      category_id TEXT NOT NULL,
+      title TEXT,
+      subtitle TEXT,
+      brand TEXT,
+      image_url TEXT,
+      product_url TEXT,
+      price NUMERIC,
+      listing_price NUMERIC,
+      rating NUMERIC,
+      reviews INTEGER,
+      in_stock BOOLEAN,
+      stock_status TEXT,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS market_products_category_idx
+      ON market_products (category_id, last_seen_at DESC);
+
+    CREATE TABLE IF NOT EXISTS market_product_snapshots (
+      plid TEXT NOT NULL,
+      snapshot_date DATE NOT NULL,
+      price NUMERIC,
+      listing_price NUMERIC,
+      rating NUMERIC,
+      reviews INTEGER,
+      in_stock BOOLEAN,
+      stock_status TEXT,
+      captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (plid, snapshot_date)
+    );
   `);
+
+  await pool.query(
+    `INSERT INTO market_categories (id,name,name_zh,seed_plid,status)
+     VALUES ('seed-vacuum-sealers','Vacuum Sealers','封口机','PLID98517065','pending'),
+            ('seed-game-controllers','Game Controllers','游戏手柄','PLID100978533','pending')
+     ON CONFLICT (id) DO NOTHING`,
+  );
 }
 
 export async function storeWebhook(pool, eventType, payload, signature) {

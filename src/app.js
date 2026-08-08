@@ -7,6 +7,7 @@ import { verifyWebhookSignature } from "./webhook.js";
 import { getResaleResults, runResaleMonitor, startResaleMonitor } from "./resale.js";
 import { listPricingRules, pricingJob, savePricingRule, startEnabledPricing } from "./pricing.js";
 import { productPageRuntimeState } from "./product-page.js";
+import { marketJobState, marketLibrary, marketProduct, runMarketCollectionStep } from "./market.js";
 
 function getEventType(payload) {
   return payload?.event || payload?.event_type || payload?.type || null;
@@ -86,6 +87,25 @@ export function createApp({ config, pool = null }) {
       };
     }));
     return res.json({ stores, count: stores.length });
+  });
+
+  app.get("/api/takealot/market/library", async (req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.json(await marketLibrary(pool, req.query)); }
+    catch (error) { return res.status(502).json({ error: error instanceof Error ? error.message : "商品库加载失败" }); }
+  });
+
+  app.get("/api/takealot/market/product", async (req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.json(await marketProduct(pool, String(req.query.plid || ""))); }
+    catch (error) { return res.status(502).json({ error: error instanceof Error ? error.message : "商品趋势加载失败" }); }
+  });
+
+  app.get("/api/takealot/market/status", (_req, res) => res.json({ ok: true, job: marketJobState() }));
+  app.post("/api/takealot/market/run-step", async (_req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.status(202).json({ ok: true, ...(await runMarketCollectionStep(pool)) }); }
+    catch (error) { return res.status(502).json({ error: error instanceof Error ? error.message : "商品采集失败" }); }
   });
 
   app.get("/api/takealot/inventory", async (req, res) => {
