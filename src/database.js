@@ -149,16 +149,52 @@ export async function initializeDatabase(pool) {
     CREATE TABLE IF NOT EXISTS market_category_sync_state (
       id TEXT PRIMARY KEY,
       status TEXT NOT NULL DEFAULT 'pending',
+      source TEXT NOT NULL DEFAULT 'seller_portal',
+      phase TEXT NOT NULL DEFAULT 'awaiting_session',
       discovered_count INTEGER NOT NULL DEFAULT 0,
       excluded_count INTEGER NOT NULL DEFAULT 0,
       remapped_count INTEGER NOT NULL DEFAULT 0,
       pending_remap_count INTEGER NOT NULL DEFAULT 0,
+      max_level INTEGER NOT NULL DEFAULT 0,
+      level_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+      active_version_id BIGINT,
       schema_version INTEGER NOT NULL DEFAULT 1,
       last_error TEXT,
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS market_category_versions (
+      id BIGSERIAL PRIMARY KEY,
+      source TEXT NOT NULL,
+      source_ref TEXT,
+      status TEXT NOT NULL DEFAULT 'candidate',
+      node_count INTEGER NOT NULL DEFAULT 0,
+      excluded_count INTEGER NOT NULL DEFAULT 0,
+      max_level INTEGER NOT NULL DEFAULT 0,
+      level_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      validated_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS market_category_versions_source_idx
+      ON market_category_versions (source, status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS market_category_mapping_rules (
+      id BIGSERIAL PRIMARY KEY,
+      legacy_category_id TEXT,
+      legacy_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+      keyword_conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
+      attribute_conditions JSONB NOT NULL DEFAULT '{}'::jsonb,
+      current_category_id TEXT NOT NULL,
+      confidence NUMERIC NOT NULL DEFAULT 100,
+      decision_source TEXT NOT NULL DEFAULT 'manual',
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS market_category_mapping_rules_legacy_idx
+      ON market_category_mapping_rules (legacy_category_id, enabled);
 
     CREATE TABLE IF NOT EXISTS market_product_snapshots (
       plid TEXT NOT NULL,
@@ -178,7 +214,22 @@ export async function initializeDatabase(pool) {
   await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS classification_status TEXT NOT NULL DEFAULT 'pending'");
   await pool.query("ALTER TABLE market_category_nodes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'navigation'");
   await pool.query("ALTER TABLE market_category_nodes ADD COLUMN IF NOT EXISTS source_path TEXT");
+  await pool.query("ALTER TABLE market_category_nodes ADD COLUMN IF NOT EXISTS version_id BIGINT");
+  await pool.query("ALTER TABLE market_category_nodes ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT FALSE");
   await pool.query("ALTER TABLE market_category_sync_state ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1");
+  await pool.query("ALTER TABLE market_category_sync_state ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'seller_portal'");
+  await pool.query("ALTER TABLE market_category_sync_state ADD COLUMN IF NOT EXISTS phase TEXT NOT NULL DEFAULT 'awaiting_session'");
+  await pool.query("ALTER TABLE market_category_sync_state ADD COLUMN IF NOT EXISTS max_level INTEGER NOT NULL DEFAULT 0");
+  await pool.query("ALTER TABLE market_category_sync_state ADD COLUMN IF NOT EXISTS level_counts JSONB NOT NULL DEFAULT '{}'::jsonb");
+  await pool.query("ALTER TABLE market_category_sync_state ADD COLUMN IF NOT EXISTS active_version_id BIGINT");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS original_category_id TEXT");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS original_category_path JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS current_category_id TEXT");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS current_category_path JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_match_confidence NUMERIC");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_match_method TEXT");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_match_rule_id BIGINT");
+  await pool.query("UPDATE market_products SET original_category_id=COALESCE(original_category_id,category_id), original_category_path=CASE WHEN jsonb_array_length(original_category_path)=0 THEN category_path ELSE original_category_path END");
   await pool.query(
     `INSERT INTO market_category_sync_state (id,status) VALUES ('takealot','pending')
      ON CONFLICT (id) DO NOTHING`,

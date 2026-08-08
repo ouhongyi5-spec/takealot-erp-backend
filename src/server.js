@@ -4,7 +4,7 @@ import { getConfig } from "./config.js";
 import { createDatabase, initializeDatabase } from "./database.js";
 import { startResaleMonitor } from "./resale.js";
 import { closeProductPageBrowser } from "./product-page.js";
-import { runCategorySyncStep, runMarketCollectionStep } from "./market.js";
+import { runSellerCategorySync } from "./seller-categories.js";
 
 const config = getConfig();
 const pool = createDatabase(config.databaseUrl);
@@ -65,10 +65,11 @@ const marketScheduler = setInterval(async () => {
   if (!pool || marketSchedulerRunning || schedulerRunning) return;
   marketSchedulerRunning = true;
   try {
-    const categoryResult = await runCategorySyncStep(pool);
-    if (categoryResult?.complete) await runMarketCollectionStep(pool);
+    // Category structure is the only market task allowed during this phase.
+    // Product collection and legacy-product matching remain explicitly paused.
+    await runSellerCategorySync(pool, config);
   }
-  catch (error) { console.error("Background market collection failed", error); }
+  catch (error) { console.error("Background seller category sync failed", error); }
   finally { marketSchedulerRunning = false; }
 }, 30_000);
 

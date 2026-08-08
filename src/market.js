@@ -58,6 +58,10 @@ export function extractCmsCategoryNodes(payload, parent) {
   return nodes;
 }
 
+export function isMissingNavigationPageError(error) {
+  return /Takealot HTTP 404\b/.test(error instanceof Error ? error.message : String(error));
+}
+
 function categoryChildren(value) {
   if (!value || typeof value !== "object") return [];
   for (const key of ["children", "items", "values", "options", "subcategories", "sub_categories"]) {
@@ -132,8 +136,15 @@ export async function runCategorySyncStep(pool) {
       }
     } else {
       categoryJob.phase = "navigation";
-      const payload = await publicRequest(`/cms/pages/${pending.source_path}?platform=desktop`);
-      const children = extractCmsCategoryNodes(payload, pending);
+      let children = [];
+      try {
+        const payload = await publicRequest(`/cms/pages/${pending.source_path}?platform=desktop`);
+        children = extractCmsCategoryNodes(payload, pending);
+      } catch (error) {
+        // Takealot navigation occasionally contains stale page links. A missing
+        // page is a dead branch, not a failure of the complete tree sync.
+        if (!isMissingNavigationPageError(error)) throw error;
+      }
       await upsertCategoryNodes(pool, children);
       await pool.query("UPDATE market_category_nodes SET sync_status='complete',is_leaf=$2,updated_at=NOW() WHERE id=$1", [pending.id, children.length === 0]);
     }
@@ -340,7 +351,7 @@ export async function marketLibrary(pool, query = {}) {
      FROM market_products p ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
      ORDER BY ${orders[query.sort] || orders.fresh} LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows;
   const summary = (await pool.query("SELECT COUNT(*)::int AS count,COUNT(DISTINCT category_id)::int AS categories,COUNT(*) FILTER (WHERE in_stock)::int AS in_stock FROM market_products")).rows[0];
-  const categories = (await pool.query(`SELECT n.id,n.name,n.name_zh,n.parent_id,n.level,n.path,n.is_leaf,
+  const categories = (await pool.query(`SELECT n.id,n.name,n.name_zh,n.parent_id,n.level,n.path,n.is_leaf,n.source,n.is_current,n.version_id,
       COUNT(p.plid)::int AS collected_count,MAX(p.last_seen_at) AS last_collected_at
     FROM market_category_nodes n LEFT JOIN market_products p ON p.category_id=n.id
     WHERE n.is_excluded=FALSE GROUP BY n.id ORDER BY n.level,n.name`)).rows;

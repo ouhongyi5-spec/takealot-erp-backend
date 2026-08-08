@@ -26,6 +26,11 @@ export function getConfig(env = process.env) {
     webhookSecret: env.TAKEALOT_WEBHOOK_SECRET || "",
     frontendUrl: env.FRONTEND_URL || "",
     databaseUrl: env.DATABASE_URL || "",
+    marketCollectionEnabled: env.MARKET_COLLECTION_ENABLED === "true",
+    sellerCategoryUrl: env.TAKEALOT_SELLER_CATEGORY_URL || "",
+    sellerCategoryCookie: env.TAKEALOT_SELLER_CATEGORY_COOKIE || "",
+    sellerCategoryCsrfToken: env.TAKEALOT_SELLER_CATEGORY_CSRF_TOKEN || "",
+    categoryAdminToken: env.CATEGORY_ADMIN_TOKEN || "",
     stores,
   };
 }
