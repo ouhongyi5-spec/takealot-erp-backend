@@ -98,7 +98,10 @@ export async function runMarketCollectionStep(pool) {
       `SELECT * FROM market_categories
        WHERE status IN ('pending','collecting','failed')
           OR (status='complete' AND COALESCE(next_update_at,NOW()) <= NOW())
-       ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'collecting' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END,
+       ORDER BY CASE
+                  WHEN COALESCE(name_zh,name) IN ('投影仪','假发') AND status IN ('pending','collecting','failed') THEN 0
+                  WHEN status='pending' THEN 1 WHEN status='collecting' THEN 2 WHEN status='failed' THEN 3 ELSE 4
+                END,
                 updated_at ASC LIMIT 1`,
     )).rows[0];
     if (!category) return { accepted: false, idle: true, ...jobs };
