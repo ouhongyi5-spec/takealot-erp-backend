@@ -153,16 +153,23 @@ export async function marketLibrary(pool, query = {}) {
   if (query.freshness === "week") where.push("last_seen_at>=NOW()-INTERVAL '7 days'");
   const orders = { fresh:"last_seen_at DESC",rating:"rating DESC NULLS LAST,reviews DESC",reviews:"reviews DESC",price_low:"price ASC NULLS LAST",price_high:"price DESC NULLS LAST" };
   const limit = Math.min(Math.max(Number(query.limit || 200),1),500);
+  const offset = Math.max(Number(query.offset || 0), 0);
+  const filteredCountValues = values.slice();
+  const filteredCount = (await pool.query(
+    `SELECT COUNT(*)::int AS count FROM market_products p ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`,
+    filteredCountValues,
+  )).rows[0]?.count || 0;
   values.push(limit);
+  values.push(offset);
   const items = (await pool.query(
     `SELECT p.*,EXTRACT(DAY FROM last_seen_at-first_seen_at)::int+1 AS tracked_days,
        (SELECT COUNT(*) FROM market_product_snapshots s WHERE s.plid=p.plid) AS snapshot_count
      FROM market_products p ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-     ORDER BY ${orders[query.sort] || orders.fresh} LIMIT $${values.length}`, values)).rows;
+     ORDER BY ${orders[query.sort] || orders.fresh} LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows;
   const summary = (await pool.query("SELECT COUNT(*)::int AS count,COUNT(DISTINCT category_id)::int AS categories,COUNT(*) FILTER (WHERE in_stock)::int AS in_stock FROM market_products")).rows[0];
   const categories = (await pool.query("SELECT id,name,name_zh,path,total_found,collected_count,last_collected_at,completed_at FROM (SELECT id,name,name_zh,category_path AS path,total_found,collected_count,last_collected_at,completed_at,status FROM market_categories) c WHERE status='complete' ORDER BY completed_at DESC")).rows;
   const snapshots = (await pool.query("SELECT COUNT(*)::int AS count FROM market_product_snapshots")).rows[0]?.count || 0;
-  return { ok:true,items,summary:{...summary,snapshots},categories,generated_at:new Date().toISOString() };
+  return { ok:true,items,filtered_count:filteredCount,summary:{...summary,snapshots},categories,generated_at:new Date().toISOString() };
 }
 
 export async function marketProduct(pool, plid) {
