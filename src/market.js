@@ -98,7 +98,7 @@ export async function runMarketCollectionStep(pool) {
       `SELECT * FROM market_categories
        WHERE status IN ('pending','collecting','failed')
           OR (status='complete' AND COALESCE(next_update_at,NOW()) <= NOW())
-       ORDER BY CASE status WHEN 'collecting' THEN 0 WHEN 'pending' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END,
+       ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'collecting' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END,
                 updated_at ASC LIMIT 1`,
     )).rows[0];
     if (!category) return { accepted: false, idle: true, ...jobs };
