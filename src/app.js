@@ -10,6 +10,7 @@ import { productPageRuntimeState } from "./product-page.js";
 import { marketJobState, marketLibrary, marketProduct, runMarketCollectionStep, startBoundCategoryCollectionTest, boundCategoryCollectionTestStatus } from "./market.js";
 import { categoryImportAuthorized, importSellerCategoryTree, runSellerCategorySync, sellerCategoryStatus } from "./seller-categories.js";
 import { categoryMatchingStatus, confirmCategoryMatch, listCategoryMatches, startCategoryMatching } from "./category-matching.js";
+import { categoryBoundRebuildStatus, rebuildMarketLibraryFromVerifiedStage } from "./market-rebuild.js";
 
 function getEventType(payload) {
   return payload?.event || payload?.event_type || payload?.type || null;
@@ -37,7 +38,7 @@ export function createApp({ config, pool = null }) {
   app.get("/", (_req, res) => {
     res.json({
       service: "Takealot ERP Backend",
-      version: "7.4.0",
+      version: "7.5.0",
       status: "ok",
       documentation: "/health",
     });
@@ -114,6 +115,24 @@ export function createApp({ config, pool = null }) {
     if (!pool) return res.status(503).json({ error: "Database not configured" });
     try { return res.status(202).json({ ok: true, ...(await startBoundCategoryCollectionTest(pool)) }); }
     catch (error) { return res.status(409).json({ error: error instanceof Error ? error.message : "类目试采无法启动" }); }
+  });
+  app.get("/api/takealot/market/category-bound-rebuild", async (_req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.json(await categoryBoundRebuildStatus(pool, config.marketCollectionEnabled)); }
+    catch (error) { return res.status(502).json({ error: error instanceof Error ? error.message : "正式重建状态加载失败" }); }
+  });
+  app.post("/api/takealot/market/category-bound-rebuild", express.json({ limit: "20kb" }), async (req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    if (!categoryImportAuthorized(req, config)) return res.status(config.categoryAdminToken ? 401 : 503).json({ error: config.categoryAdminToken ? "Unauthorized" : "CATEGORY_ADMIN_TOKEN is not configured" });
+    try {
+      return res.json(await rebuildMarketLibraryFromVerifiedStage(pool, {
+        confirmation: req.body?.confirmation,
+        expectedOldProductCount: req.body?.expected_old_product_count,
+        collectionEnabled: config.marketCollectionEnabled,
+      }));
+    } catch (error) {
+      return res.status(409).json({ error: error instanceof Error ? error.message : "正式重建被安全条件阻止" });
+    }
   });
   app.post("/api/takealot/market/run-step", async (_req, res) => {
     if (!pool) return res.status(503).json({ error: "Database not configured" });

@@ -295,6 +295,48 @@ export async function initializeDatabase(pool) {
     );
     CREATE INDEX IF NOT EXISTS market_collection_test_products_category_idx
       ON market_collection_test_products (test_id, public_category_id, plid);
+
+    CREATE TABLE IF NOT EXISTS market_rebuild_runs (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      old_product_count INTEGER NOT NULL DEFAULT 0,
+      old_snapshot_count INTEGER NOT NULL DEFAULT 0,
+      old_category_count INTEGER NOT NULL DEFAULT 0,
+      new_product_count INTEGER NOT NULL DEFAULT 0,
+      public_category_id TEXT NOT NULL,
+      seller_category_id TEXT,
+      seller_category_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+      last_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS market_products_rebuild_archive (
+      rebuild_id TEXT NOT NULL,
+      plid TEXT NOT NULL,
+      product_data JSONB NOT NULL,
+      archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (rebuild_id, plid)
+    );
+
+    CREATE TABLE IF NOT EXISTS market_snapshots_rebuild_archive (
+      rebuild_id TEXT NOT NULL,
+      plid TEXT NOT NULL,
+      snapshot_date DATE NOT NULL,
+      snapshot_data JSONB NOT NULL,
+      archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (rebuild_id, plid, snapshot_date)
+    );
+
+    CREATE TABLE IF NOT EXISTS market_categories_rebuild_archive (
+      rebuild_id TEXT NOT NULL,
+      category_id TEXT NOT NULL,
+      category_data JSONB NOT NULL,
+      archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (rebuild_id, category_id)
+    );
   `);
 
   await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_path JSONB NOT NULL DEFAULT '[]'::jsonb");
