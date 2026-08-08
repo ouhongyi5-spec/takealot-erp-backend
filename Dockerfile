@@ -40,6 +40,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
+COPY data ./data
 COPY railway.json README.md ./
 
 ENV NODE_ENV=production
