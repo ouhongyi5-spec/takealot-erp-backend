@@ -180,3 +180,75 @@ test("maps the legacy Controllers leaf to the deeper Game Controllers path using
   assert.equal(result?.category.path_id, "game-controllers-path");
   assert.ok((result?.confidence || 0) >= 95);
 });
+
+function gamingPath(pathId, segments) {
+  return {
+    id: segments.at(0).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name: segments.at(0),
+    path_id: pathId,
+    leaf_name: segments.at(-1),
+    path: ["Consumer Electronics", "Gaming", ...segments].map((name) => ({ name })),
+  };
+}
+
+const controllerSplitCandidates = [
+  gamingPath("game-controllers", ["Input Devices", "Game Controllers"]),
+  gamingPath("keyboards", ["Input Devices", "Keyboards"]),
+  gamingPath("gaming-mice", ["Input Devices", "Gaming Mice"]),
+  gamingPath("consoles", ["Video Game Consoles", "Video Game Consoles"]),
+  gamingPath("charging", ["Video Game Accessories", "Charging Stations"]),
+  gamingPath("cooling", ["Video Game Accessories", "Cooling Fans"]),
+  gamingPath("cables", ["Video Game Accessories", "Cables & Adapters"]),
+  gamingPath("cases", ["Video Game Accessories", "Hardware Protection", "Cases"]),
+  gamingPath("console-covers", ["Video Game Accessories", "Hardware Protection", "Console Covers"]),
+  gamingPath("thumb-grips", ["Video Game Accessories", "Hardware Protection", "Covers & Thumb Grips"]),
+  gamingPath("battery-packs", ["Video Game Accessories", "Batteries聽& Battery Packs"]),
+  gamingPath("racks", ["Video Game Accessories", "Racks & Mounts"]),
+  gamingPath("sensor-bars", ["Video Game Accessories", "Sensor Bars"]),
+  gamingPath("key-caps", ["Video Game Accessories", "Key Caps & Switches"]),
+  gamingPath("memory-cards", ["Video Game Accessories", "Gaming Memory Cards"]),
+];
+
+function legacyControllerProduct(title) {
+  return { title, original_category_path: [{ name: "Controllers" }] };
+}
+
+for (const [title, expectedPath, minimumConfidence] of [
+  ["Wireless Gamepad Controller for PS5", "game-controllers", 95],
+  ["4K HDMI Wireless Retro Game Stick with Two Controllers", "consoles", 95],
+  ["Dual Charging Dock for PS4 Controllers", "charging", 95],
+  ["Vertical Cooling Fan Stand Compatible with PS5", "cooling", 95],
+  ["USB Charging Cable Compatible with Xbox 360", "cables", 95],
+  ["Silicone Controller Case Compatible with Nintendo Switch", "cases", 95],
+  ["Analog Thumbstick Caps for Xbox Controller", "thumb-grips", 95],
+  ["Wii Remote Sensor Bar", "sensor-bars", 95],
+  ["Gaming Chatpad Keyboard for Xbox Controller", "keyboards", 95],
+  ["Wireless Controller RGB Hall Effect Remapping", "game-controllers", 95],
+  ["PXN V99 Gaming Racing Wheel with Pedals", "game-controllers", 95],
+  ["Retro Handheld Game Console with 500 Games", "consoles", 95],
+  ["64MB Memory Card Compatible with PS2", "memory-cards", 95],
+  ["Wireless Gaming Mouse Compatible with PC", "gaming-mice", 95],
+  ["Wireless Phone Game Controler Compatible with PS4 PC iOS Android", "game-controllers", 95],
+  ["Dual Charger Compatible with Xbox One X", "charging", 95],
+  ["Protective Console Shell Compatible with PS5", "console-covers", 90],
+]) {
+  test(`splits legacy Controllers title into ${expectedPath}: ${title}`, () => {
+    const result = recommendCategoryForProduct(legacyControllerProduct(title), controllerSplitCandidates);
+    assert.equal(result?.category.path_id, expectedPath);
+    assert.ok(Number(result?.confidence || 0) >= minimumConfidence);
+    assert.equal(result?.method, "legacy_controllers_title_v3");
+  });
+}
+
+test("does not misclassify an explicit controller repair component as a complete controller", () => {
+  const result = recommendCategoryForProduct(
+    legacyControllerProduct("5 Pieces FPC Flex Cable Set Compatible with PS5 Controller"),
+    controllerSplitCandidates,
+  );
+  assert.equal(result, null);
+});
+
+test("does not scatter a model-only Controllers title into an unrelated category", () => {
+  const result = recommendCategoryForProduct(legacyControllerProduct("SteelSeries Stratus+"), controllerSplitCandidates);
+  assert.equal(result, null);
+});
