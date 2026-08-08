@@ -231,6 +231,12 @@ for (const [title, expectedPath, minimumConfidence] of [
   ["Wireless Phone Game Controler Compatible with PS4 PC iOS Android", "game-controllers", 95],
   ["Dual Charger Compatible with Xbox One X", "charging", 95],
   ["Protective Console Shell Compatible with PS5", "console-covers", 90],
+  ["Controller 6 Axis Turbo Compatible with Switch OLED Black", "game-controllers", 95],
+  ["2 Pack Remote Controller for Wii with Silicone Case", "game-controllers", 95],
+  ["Generic Wireless PS4Controller-Compatible with PlayStation4", "game-controllers", 95],
+  ["Thrustmaster SimTask FarmStick PlayStation", "game-controllers", 95],
+  ["Sim Racing Load Cell Pedals (3 Pedals) PC", "game-controllers", 95],
+  ["32GB Card Reader with FMCB Compatible with PS2 Fat", "memory-cards", 95],
 ]) {
   test(`splits legacy Controllers title into ${expectedPath}: ${title}`, () => {
     const result = recommendCategoryForProduct(legacyControllerProduct(title), controllerSplitCandidates);
@@ -250,5 +256,13 @@ test("does not misclassify an explicit controller repair component as a complete
 
 test("does not scatter a model-only Controllers title into an unrelated category", () => {
   const result = recommendCategoryForProduct(legacyControllerProduct("SteelSeries Stratus+"), controllerSplitCandidates);
+  assert.equal(result, null);
+});
+
+test("does not classify a console replacement power supply as a battery pack", () => {
+  const result = recommendCategoryForProduct(
+    legacyControllerProduct("Power Supply Replacement Compatible with PS4 Pro 70000"),
+    controllerSplitCandidates,
+  );
   assert.equal(result, null);
 });
