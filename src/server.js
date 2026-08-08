@@ -4,7 +4,7 @@ import { getConfig } from "./config.js";
 import { createDatabase, initializeDatabase } from "./database.js";
 import { startResaleMonitor } from "./resale.js";
 import { closeProductPageBrowser } from "./product-page.js";
-import { runMarketCollectionStep } from "./market.js";
+import { runCategorySyncStep, runMarketCollectionStep } from "./market.js";
 
 const config = getConfig();
 const pool = createDatabase(config.databaseUrl);
@@ -64,7 +64,10 @@ let marketSchedulerRunning = false;
 const marketScheduler = setInterval(async () => {
   if (!pool || marketSchedulerRunning || schedulerRunning) return;
   marketSchedulerRunning = true;
-  try { await runMarketCollectionStep(pool); }
+  try {
+    const categoryResult = await runCategorySyncStep(pool);
+    if (categoryResult?.complete) await runMarketCollectionStep(pool);
+  }
   catch (error) { console.error("Background market collection failed", error); }
   finally { marketSchedulerRunning = false; }
 }, 30_000);

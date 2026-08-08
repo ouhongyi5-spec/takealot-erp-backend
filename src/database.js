@@ -107,6 +107,8 @@ export async function initializeDatabase(pool) {
       plid TEXT PRIMARY KEY,
       tsin TEXT,
       category_id TEXT NOT NULL,
+      category_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+      classification_status TEXT NOT NULL DEFAULT 'pending',
       title TEXT,
       subtitle TEXT,
       brand TEXT,
@@ -124,6 +126,37 @@ export async function initializeDatabase(pool) {
     CREATE INDEX IF NOT EXISTS market_products_category_idx
       ON market_products (category_id, last_seen_at DESC);
 
+    CREATE TABLE IF NOT EXISTS market_category_nodes (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      name_zh TEXT,
+      parent_id TEXT,
+      level INTEGER NOT NULL DEFAULT 1,
+      path JSONB NOT NULL DEFAULT '[]'::jsonb,
+      is_leaf BOOLEAN NOT NULL DEFAULT FALSE,
+      is_excluded BOOLEAN NOT NULL DEFAULT FALSE,
+      sync_status TEXT NOT NULL DEFAULT 'pending',
+      discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS market_category_nodes_parent_idx
+      ON market_category_nodes (parent_id, level, name);
+    CREATE INDEX IF NOT EXISTS market_category_nodes_sync_idx
+      ON market_category_nodes (is_excluded, sync_status, updated_at);
+
+    CREATE TABLE IF NOT EXISTS market_category_sync_state (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'pending',
+      discovered_count INTEGER NOT NULL DEFAULT 0,
+      excluded_count INTEGER NOT NULL DEFAULT 0,
+      remapped_count INTEGER NOT NULL DEFAULT 0,
+      pending_remap_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS market_product_snapshots (
       plid TEXT NOT NULL,
       snapshot_date DATE NOT NULL,
@@ -137,6 +170,13 @@ export async function initializeDatabase(pool) {
       PRIMARY KEY (plid, snapshot_date)
     );
   `);
+
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_path JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS classification_status TEXT NOT NULL DEFAULT 'pending'");
+  await pool.query(
+    `INSERT INTO market_category_sync_state (id,status) VALUES ('takealot','pending')
+     ON CONFLICT (id) DO NOTHING`,
+  );
 
   await pool.query(
     `INSERT INTO market_categories (id,name,name_zh,seed_plid,status)
