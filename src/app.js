@@ -38,7 +38,7 @@ export function createApp({ config, pool = null }) {
   app.get("/", (_req, res) => {
     res.json({
       service: "Takealot ERP Backend",
-      version: "7.5.0",
+      version: "7.5.1",
       status: "ok",
       documentation: "/health",
     });
@@ -114,6 +114,16 @@ export function createApp({ config, pool = null }) {
   app.post("/api/takealot/market/category-collection-test", async (_req, res) => {
     if (!pool) return res.status(503).json({ error: "Database not configured" });
     try { return res.status(202).json({ ok: true, ...(await startBoundCategoryCollectionTest(pool)) }); }
+    catch (error) { return res.status(409).json({ error: error instanceof Error ? error.message : "类目试采无法启动" }); }
+  });
+  app.get("/api/takealot/market/category-collection-test/:categoryKey", async (req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.json(await boundCategoryCollectionTestStatus(pool, req.params.categoryKey)); }
+    catch (error) { return res.status(404).json({ error: error instanceof Error ? error.message : "类目试采状态加载失败" }); }
+  });
+  app.post("/api/takealot/market/category-collection-test/:categoryKey", async (req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.status(202).json({ ok: true, ...(await startBoundCategoryCollectionTest(pool, req.params.categoryKey)) }); }
     catch (error) { return res.status(409).json({ error: error instanceof Error ? error.message : "类目试采无法启动" }); }
   });
   app.get("/api/takealot/market/category-bound-rebuild", async (_req, res) => {

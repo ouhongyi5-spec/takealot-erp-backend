@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BOUND_CATEGORY_TEST, validateBoundCategoryCollection } from "../src/market.js";
+import { BOUND_CATEGORY_TEST, BOUND_CATEGORY_TESTS, WIGS_BOUND_CATEGORY_TEST, validateBoundCategoryCollection } from "../src/market.js";
 
 test("pins the trial to the exact Vacuum Sealers public and seller categories", () => {
   assert.equal(BOUND_CATEGORY_TEST.public_category_id, "33636");
@@ -10,6 +10,20 @@ test("pins the trial to the exact Vacuum Sealers public and seller categories", 
     "Kitchen Appliances",
     "Vacuum Sealers",
   ]);
+});
+
+test("pins the Wigs trial to a separate exact public and seller category", () => {
+  assert.equal(WIGS_BOUND_CATEGORY_TEST.id, "wigs-v1");
+  assert.equal(WIGS_BOUND_CATEGORY_TEST.public_category_id, "33935");
+  assert.deepEqual(WIGS_BOUND_CATEGORY_TEST.seller_path_names, [
+    "Personal & Lifestyle",
+    "Beauty",
+    "Hair Care",
+    "Wigs",
+  ]);
+  assert.equal(WIGS_BOUND_CATEGORY_TEST.max_pages, 400);
+  assert.notEqual(WIGS_BOUND_CATEGORY_TEST.id, BOUND_CATEGORY_TEST.id);
+  assert.equal(BOUND_CATEGORY_TESTS.wigs, WIGS_BOUND_CATEGORY_TEST);
 });
 
 test("accepts a complete unique category crawl with a single seller path", () => {
