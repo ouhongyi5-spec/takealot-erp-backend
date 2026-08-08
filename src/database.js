@@ -222,6 +222,24 @@ export async function initializeDatabase(pool) {
     CREATE INDEX IF NOT EXISTS market_category_mapping_rules_legacy_idx
       ON market_category_mapping_rules (legacy_category_id, enabled);
 
+    CREATE TABLE IF NOT EXISTS market_category_match_state (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'ready_not_started',
+      catalog_version_id BIGINT,
+      total_products INTEGER NOT NULL DEFAULT 0,
+      processed_count INTEGER NOT NULL DEFAULT 0,
+      recommended_count INTEGER NOT NULL DEFAULT 0,
+      high_count INTEGER NOT NULL DEFAULT 0,
+      review_count INTEGER NOT NULL DEFAULT 0,
+      calibration_count INTEGER NOT NULL DEFAULT 0,
+      confirmed_count INTEGER NOT NULL DEFAULT 0,
+      unmatched_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS market_product_snapshots (
       plid TEXT NOT NULL,
       snapshot_date DATE NOT NULL,
@@ -262,10 +280,32 @@ export async function initializeDatabase(pool) {
   await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_match_confidence NUMERIC");
   await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_match_method TEXT");
   await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_match_rule_id BIGINT");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS recommended_category_id TEXT");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS recommended_category_path JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS recommended_candidates JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_match_status TEXT NOT NULL DEFAULT 'pending'");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_match_evidence JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_matched_at TIMESTAMPTZ");
+  await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_confirmed_at TIMESTAMPTZ");
   await pool.query("UPDATE market_products SET original_category_id=COALESCE(original_category_id,category_id), original_category_path=CASE WHEN jsonb_array_length(original_category_path)=0 THEN category_path ELSE original_category_path END");
   await pool.query(
     `INSERT INTO market_category_sync_state (id,status) VALUES ('takealot','pending')
      ON CONFLICT (id) DO NOTHING`,
+  );
+  await pool.query(
+    `INSERT INTO market_category_match_state (id,total_products,confirmed_count)
+     SELECT 'takealot',COUNT(*)::int,COUNT(*) FILTER (WHERE current_category_id IS NOT NULL)::int FROM market_products
+     ON CONFLICT (id) DO NOTHING`,
+  );
+  // Older category-sync code reused classification_status and could report all
+  // legacy products as remapped. Only a confirmed current category is a real
+  // match in the seller-portal catalog.
+  await pool.query(
+    `UPDATE market_category_sync_state SET
+       remapped_count=(SELECT COUNT(*)::int FROM market_products WHERE current_category_id IS NOT NULL),
+       pending_remap_count=(SELECT COUNT(*)::int FROM market_products WHERE current_category_id IS NULL),
+       updated_at=NOW()
+     WHERE id='takealot'`,
   );
 
   await pool.query(

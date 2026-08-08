@@ -242,10 +242,26 @@ export async function importSellerCategoryTree(pool, payload, sourceRef = "selle
       `UPDATE market_category_sync_state SET status='complete',source=$1,phase='catalog_ready',
        discovered_count=$2,excluded_count=$3,max_level=$4,level_counts=$5::jsonb,
        active_version_id=$6,full_path_count=$7,usable_path_count=$8,qualification_count=$9,
-       special_count=$10,raw_max_level=$11,completed_at=NOW(),last_error=NULL,updated_at=NOW() WHERE id='takealot'`,
+       special_count=$10,raw_max_level=$11,remapped_count=0,
+       pending_remap_count=(SELECT COUNT(*)::int FROM market_products WHERE current_category_id IS NULL),
+       completed_at=NOW(),last_error=NULL,updated_at=NOW() WHERE id='takealot'`,
       [SOURCE, validation.counts.total, validation.counts.excluded_books, validation.counts.max_level, JSON.stringify(validation.counts.by_level), version.id,
        validation.counts.full_paths, validation.counts.usable_paths, validation.counts.qualification_count,
        validation.counts.special_count, validation.counts.raw_max_level],
+    );
+    await client.query(
+      `UPDATE market_products SET recommended_category_id=NULL,recommended_category_path='[]'::jsonb,
+       recommended_candidates='[]'::jsonb,category_match_confidence=NULL,category_match_method=NULL,
+       category_match_evidence='[]'::jsonb,category_match_status=CASE WHEN current_category_id IS NULL THEN 'pending' ELSE 'confirmed' END,
+       category_matched_at=NULL WHERE current_category_id IS NULL`,
+    );
+    await client.query(
+      `INSERT INTO market_category_match_state (id,status,catalog_version_id,total_products,confirmed_count,updated_at)
+       SELECT 'takealot','ready_not_started',$1,COUNT(*)::int,COUNT(*) FILTER (WHERE current_category_id IS NOT NULL)::int,NOW() FROM market_products
+       ON CONFLICT (id) DO UPDATE SET status='ready_not_started',catalog_version_id=$1,total_products=excluded.total_products,
+       processed_count=excluded.confirmed_count,recommended_count=0,high_count=0,review_count=0,calibration_count=0,
+       confirmed_count=excluded.confirmed_count,unmatched_count=0,last_error=NULL,started_at=NULL,completed_at=NULL,updated_at=NOW()`,
+      [version.id],
     );
     await client.query("COMMIT");
     categoryJob.phase = "catalog_ready";

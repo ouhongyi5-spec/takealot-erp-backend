@@ -323,7 +323,7 @@ export async function marketLibrary(pool, query = {}) {
   if (query.category_id) {
     values.push(String(query.category_id));
     values.push(JSON.stringify([{ id:String(query.category_id) }]));
-    where.push(`category_id IN (SELECT id FROM market_category_nodes WHERE id=$${values.length - 1} OR path @> $${values.length}::jsonb)`);
+    where.push(`COALESCE(current_category_id,category_id) IN (SELECT id FROM market_category_nodes WHERE id=$${values.length - 1} OR path @> $${values.length}::jsonb)`);
   }
   if (query.q) { values.push(`%${query.q}%`); where.push(`(title ILIKE $${values.length} OR plid ILIKE $${values.length} OR tsin ILIKE $${values.length} OR brand ILIKE $${values.length})`); }
   if (query.stock === "in") where.push("in_stock=TRUE");
@@ -350,10 +350,10 @@ export async function marketLibrary(pool, query = {}) {
        (SELECT COUNT(*) FROM market_product_snapshots s WHERE s.plid=p.plid) AS snapshot_count
      FROM market_products p ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
      ORDER BY ${orders[query.sort] || orders.fresh} LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows;
-  const summary = (await pool.query("SELECT COUNT(*)::int AS count,COUNT(DISTINCT category_id)::int AS categories,COUNT(*) FILTER (WHERE in_stock)::int AS in_stock FROM market_products")).rows[0];
+  const summary = (await pool.query("SELECT COUNT(*)::int AS count,COUNT(DISTINCT COALESCE(current_category_id,category_id))::int AS categories,COUNT(*) FILTER (WHERE in_stock)::int AS in_stock FROM market_products")).rows[0];
   const categories = (await pool.query(`SELECT n.id,n.name,n.name_zh,n.parent_id,n.level,n.path,n.is_leaf,n.source,n.is_current,n.version_id,
       COUNT(p.plid)::int AS collected_count,MAX(p.last_seen_at) AS last_collected_at
-    FROM market_category_nodes n LEFT JOIN market_products p ON p.category_id=n.id
+    FROM market_category_nodes n LEFT JOIN market_products p ON COALESCE(p.current_category_id,p.category_id)=n.id
     WHERE n.is_excluded=FALSE GROUP BY n.id ORDER BY n.level,n.name`)).rows;
   const snapshots = (await pool.query("SELECT COUNT(*)::int AS count FROM market_product_snapshots")).rows[0]?.count || 0;
   return { ok:true,items,filtered_count:filteredCount,summary:{...summary,snapshots},categories,generated_at:new Date().toISOString() };

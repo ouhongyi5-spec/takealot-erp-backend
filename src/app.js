@@ -9,6 +9,7 @@ import { listPricingRules, pricingJob, savePricingRule, startEnabledPricing } fr
 import { productPageRuntimeState } from "./product-page.js";
 import { marketJobState, marketLibrary, marketProduct, runMarketCollectionStep } from "./market.js";
 import { categoryImportAuthorized, importSellerCategoryTree, runSellerCategorySync, sellerCategoryStatus } from "./seller-categories.js";
+import { categoryMatchingStatus, confirmCategoryMatch, listCategoryMatches, startCategoryMatching } from "./category-matching.js";
 
 function getEventType(payload) {
   return payload?.event || payload?.event_type || payload?.type || null;
@@ -124,6 +125,26 @@ export function createApp({ config, pool = null }) {
     if (!categoryImportAuthorized(req, config)) return res.status(config.categoryAdminToken ? 401 : 503).json({ error: config.categoryAdminToken ? "Unauthorized" : "CATEGORY_ADMIN_TOKEN is not configured" });
     try { return res.status(201).json(await importSellerCategoryTree(pool, req.body, "seller-portal-manual-import")); }
     catch (error) { return res.status(422).json({ error: error instanceof Error ? error.message : "类目文件校验失败" }); }
+  });
+  app.get("/api/takealot/market/category-matches/status", async (_req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.json(await categoryMatchingStatus(pool)); }
+    catch (error) { return res.status(502).json({ error: error instanceof Error ? error.message : "匹配状态加载失败" }); }
+  });
+  app.get("/api/takealot/market/category-matches", async (req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.json(await listCategoryMatches(pool, req.query)); }
+    catch (error) { return res.status(502).json({ error: error instanceof Error ? error.message : "匹配建议加载失败" }); }
+  });
+  app.post("/api/takealot/market/category-matches/run", express.json({ limit: "20kb" }), async (_req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.status(202).json({ ok: true, ...(await startCategoryMatching(pool)) }); }
+    catch (error) { return res.status(409).json({ error: error instanceof Error ? error.message : "匹配任务无法启动" }); }
+  });
+  app.post("/api/takealot/market/category-matches/:plid/confirm", express.json({ limit: "50kb" }), async (req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.json(await confirmCategoryMatch(pool, String(req.params.plid || ""), req.body)); }
+    catch (error) { return res.status(422).json({ error: error instanceof Error ? error.message : "类目确认失败" }); }
   });
 
   app.get("/api/takealot/inventory", async (req, res) => {
