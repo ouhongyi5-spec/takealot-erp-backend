@@ -4,7 +4,6 @@ import { getConfig } from "./config.js";
 import { createDatabase, initializeDatabase } from "./database.js";
 import { startResaleMonitor } from "./resale.js";
 import { closeProductPageBrowser } from "./product-page.js";
-import { runEnabledPricing } from "./pricing.js";
 
 const config = getConfig();
 const pool = createDatabase(config.databaseUrl);
@@ -60,37 +59,8 @@ const scheduler = setInterval(async () => {
   }
 }, 60_000);
 
-let pricingSchedulerRunning = false;
-const pricingScheduler = setInterval(async () => {
-  if (pricingSchedulerRunning || !pool) return;
-  pricingSchedulerRunning = true;
-  try {
-    const result = await runEnabledPricing({ config, pool, dueOnly: true });
-    if (result.results.length) console.log(`Automatic pricing checked ${result.results.length}; adjusted ${result.adjusted}`);
-  } catch (error) {
-    console.error("Automatic pricing scheduler failed", error);
-  } finally {
-    pricingSchedulerRunning = false;
-  }
-}, 30_000);
-
-// Fast lane: products known to have competing sellers are refreshed every
-// ten minutes. Stable no-competitor/not-found products stay on the daily lane.
-let lastHotMonitorSlot = "";
-const hotMonitorScheduler = setInterval(() => {
-  const now = new Date();
-  const slot = `${now.toISOString().slice(0, 16).replace(/.$/, "0")}`;
-  if (slot === lastHotMonitorSlot) return;
-  lastHotMonitorSlot = slot;
-  for (const store of config.stores) {
-    startResaleMonitor({ config, pool, store, categories: ["followed"], trigger: "hot_10m" });
-  }
-}, 60_000);
-
 async function shutdown() {
   clearInterval(scheduler);
-  clearInterval(pricingScheduler);
-  clearInterval(hotMonitorScheduler);
   server.close(async () => {
     await closeProductPageBrowser();
     if (pool) await pool.end();

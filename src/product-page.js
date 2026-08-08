@@ -1,31 +1,35 @@
 import puppeteer from "puppeteer";
 
 let browserPromise;
+let browserIdleTimer;
 const highPriorityQueue = [];
 const normalPriorityQueue = [];
 let queueRunning = false;
-const inFlightProducts = new Map();
-const productCache = new Map();
-const PRODUCT_CACHE_MS = Math.max(15_000, Number(process.env.PRODUCT_PAGE_CACHE_MS) || 120_000);
-const DIRECT_TIMEOUT_MS = Math.max(3_000, Number(process.env.PRODUCT_DIRECT_TIMEOUT_MS) || 10_000);
-let discoveredEndpointTemplate = "https://api.takealot.com/rest/v-1-10-0/product-details/PLID{productlineId}?platform=desktop";
-let directFailureCount = 0;
-let directDisabledUntil = 0;
+const PUBLIC_API_BASE = "https://api.takealot.com/rest/v-1-18-0";
+const DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
+const BROWSER_IDLE_MS = Math.max(15_000, Number(process.env.PRODUCT_PAGE_BROWSER_IDLE_MS) || 60_000);
 
-async function resetBrowser() {
-  const pending = browserPromise;
-  browserPromise = undefined;
-  if (!pending) return;
-  void pending.then((instance) => instance.close()).catch(() => {});
+function cancelBrowserIdleClose() {
+  if (!browserIdleTimer) return;
+  clearTimeout(browserIdleTimer);
+  browserIdleTimer = undefined;
+}
+
+function scheduleBrowserIdleClose() {
+  cancelBrowserIdleClose();
+  browserIdleTimer = setTimeout(() => {
+    browserIdleTimer = undefined;
+    void closeProductPageBrowser();
+  }, BROWSER_IDLE_MS);
+  browserIdleTimer.unref?.();
 }
 
 async function browser() {
+  cancelBrowserIdleClose();
   if (!browserPromise) {
     browserPromise = puppeteer.launch({
       headless: true,
       args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-crash-reporter",
         "--disable-breakpad",
@@ -46,54 +50,42 @@ async function browser() {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function isProductPayload(value) {
-  return Boolean(value && typeof value === "object" && (value.seller_detail || value.buybox || value.other_offers));
-}
-
-function endpointTemplate(url, productlineId) {
-  const marker = `PLID${productlineId}`;
-  return url.includes(marker) ? url.replace(marker, "PLID{productlineId}") : null;
-}
-
-async function readProductDirect(productlineId) {
-  if (!discoveredEndpointTemplate || Date.now() < directDisabledUntil) return null;
+async function readProductPageHttp(productlineId, options = {}) {
+  const timeoutMs = Math.min(Number(options.timeoutMs) || 15_000, 20_000);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), DIRECT_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  timeout.unref?.();
   try {
-    const url = discoveredEndpointTemplate.replace("{productlineId}", String(productlineId));
-    const response = await fetch(url, {
+    const response = await fetch(`${PUBLIC_API_BASE}/product-details/PLID${productlineId}?platform=desktop&erp_refresh=${Date.now()}`, {
       signal: controller.signal,
       headers: {
         Accept: "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36",
-        Referer: `https://www.takealot.com/-/PLID${productlineId}`,
+        "User-Agent": DEFAULT_USER_AGENT,
+        "Cache-Control": "no-cache, no-store, max-age=0",
+        Pragma: "no-cache",
       },
     });
-    if (!response.ok) throw new Error(`商品数据直连 ${response.status}`);
-    const data = await response.json();
-    if (!isProductPayload(data)) throw new Error("商品数据直连返回格式异常");
-    directFailureCount = 0;
-    return data;
-  } catch (error) {
-    directFailureCount += 1;
-    // A temporary public endpoint block must not break monitoring. Browser
-    // fallback remains available and can also teach us a newer API version.
-    if (directFailureCount >= 3) {
-      directDisabledUntil = Date.now() + 5 * 60_000;
-      directFailureCount = 0;
+    if (response.status === 429) throw new Error("商品页面请求受限 429");
+    if (!response.ok) throw new Error(`商品页面报价请求 ${response.status}`);
+    const product = await response.json();
+    if (!product || typeof product !== "object" || (!product.buybox && !product.seller_detail && !product.core)) {
+      throw new Error("商品页面 HTTP 数据不完整");
     }
-    return null;
+    return product;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("商品页面 HTTP 加载超时");
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function readProductPageOnce(productlineId, options = {}) {
+async function readProductPageOnceBrowser(productlineId, options = {}) {
   const timeoutMs = Number(options.timeoutMs) || 35_000;
   const instance = await browser();
   const page = await instance.newPage();
   try {
-    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36");
+    await page.setUserAgent(DEFAULT_USER_AGENT);
     await page.setViewport({ width: 1365, height: 768 });
     await page.setCacheEnabled(false);
     await page.setExtraHTTPHeaders({
@@ -137,14 +129,7 @@ async function readProductPageOnce(productlineId, options = {}) {
       if (response.status() === 429) return rejectProduct?.(new Error("商品页面请求受限 429"));
       try {
         if (!response.ok()) throw new Error(`商品页面报价请求 ${response.status()}`);
-        const data = await response.json();
-        const learned = endpointTemplate(response.url(), productlineId);
-        if (learned) {
-          discoveredEndpointTemplate = learned;
-          directDisabledUntil = 0;
-          directFailureCount = 0;
-        }
-        resolveProduct?.(data);
+        resolveProduct?.(await response.json());
       } catch (error) {
         rejectProduct?.(error);
       }
@@ -165,6 +150,23 @@ async function readProductPageOnce(productlineId, options = {}) {
     }
   } finally {
     await page.close().catch(() => {});
+    scheduleBrowserIdleClose();
+  }
+}
+
+async function readProductPageOnce(productlineId, options = {}) {
+  if (options.forceBrowser) return readProductPageOnceBrowser(productlineId, options);
+  try {
+    return await readProductPageHttp(productlineId, options);
+  } catch (httpError) {
+    if (options.browserFallback === false) throw httpError;
+    try {
+      return await readProductPageOnceBrowser(productlineId, options);
+    } catch (browserError) {
+      const httpMessage = httpError instanceof Error ? httpError.message : String(httpError);
+      const browserMessage = browserError instanceof Error ? browserError.message : String(browserError);
+      throw new Error(`HTTP: ${httpMessage}; 浏览器兜底: ${browserMessage}`);
+    }
   }
 }
 
@@ -184,21 +186,8 @@ async function drainQueue() {
     while (highPriorityQueue.length || normalPriorityQueue.length) {
       const task = highPriorityQueue.shift() || normalPriorityQueue.shift();
       try {
-        const hardTimeoutMs = (Number(task.options.timeoutMs) || 35_000) + 10_000;
-        let timer;
-        const hardTimeout = new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error("商品页面检查硬超时，已自动跳过")), hardTimeoutMs);
-        });
-        try {
-          task.resolve(await Promise.race([
-            readProductPageOnce(task.productlineId, task.options),
-            hardTimeout,
-          ]));
-        } finally {
-          clearTimeout(timer);
-        }
+        task.resolve(await readProductPageOnce(task.productlineId, task.options));
       } catch (error) {
-        if (/硬超时/.test(error instanceof Error ? error.message : String(error))) await resetBrowser();
         task.reject(error);
       }
     }
@@ -208,10 +197,8 @@ async function drainQueue() {
   }
 }
 
-async function readProductPageUncached(productlineId, options = {}) {
-  const direct = await readProductDirect(productlineId);
-  if (direct) return direct;
-  const retryDelays = options.retryDelays || [0];
+export async function readProductPage(productlineId, options = {}) {
+  const retryDelays = options.retryDelays || [0, 60_000, 300_000, 900_000];
   let lastError;
   for (const delay of retryDelays) {
     if (delay) await wait(delay);
@@ -228,25 +215,25 @@ async function readProductPageUncached(productlineId, options = {}) {
   throw lastError;
 }
 
-export async function readProductPage(productlineId, options = {}) {
-  const key = String(productlineId);
-  const cached = productCache.get(key);
-  if (!options.forceFresh && cached && Date.now() - cached.storedAt < PRODUCT_CACHE_MS) return cached.data;
-  if (!options.forceFresh && inFlightProducts.has(key)) return inFlightProducts.get(key);
-
-  const pending = readProductPageUncached(productlineId, options)
-    .then((data) => {
-      productCache.set(key, { data, storedAt: Date.now() });
-      return data;
-    })
-    .finally(() => inFlightProducts.delete(key));
-  inFlightProducts.set(key, pending);
-  return pending;
-}
-
 export async function closeProductPageBrowser() {
+  cancelBrowserIdleClose();
   if (!browserPromise) return;
   const instance = await browserPromise.catch(() => null);
   browserPromise = undefined;
   await instance?.close().catch(() => {});
+}
+
+export function productPageRuntimeState() {
+  const memory = process.memoryUsage();
+  return {
+    primary_mode: "http",
+    browser_fallback: true,
+    browser_running: Boolean(browserPromise),
+    browser_idle_timeout_seconds: Math.round(BROWSER_IDLE_MS / 1000),
+    queue_running: queueRunning,
+    queued_high_priority: highPriorityQueue.length,
+    queued_normal_priority: normalPriorityQueue.length,
+    process_rss_mb: Math.round(memory.rss / 1024 / 1024),
+    process_heap_used_mb: Math.round(memory.heapUsed / 1024 / 1024),
+  };
 }

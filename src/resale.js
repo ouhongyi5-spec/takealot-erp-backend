@@ -109,9 +109,9 @@ export async function inspectOffer(store, offer, options = {}) {
   }
 }
 
-export async function inspectSingleOffer({ config, pool, store, offer, retryDelays = [0, 5_000, 15_000], forceFresh = false }) {
+export async function inspectSingleOffer({ config, pool, store, offer, retryDelays = [0, 5_000, 15_000] }) {
   const activeStore = await resolveActiveStore(config, store);
-  const result = await inspectOffer(activeStore, offer, { retryDelays, priority: "high", timeoutMs: 25_000, forceFresh });
+  const result = await inspectOffer(activeStore, offer, { retryDelays, priority: "high", timeoutMs: 25_000 });
   memoryResults.set(`${store.id}:${result.offer_id}`, result);
   await saveResaleResult(pool, result);
   return result;
@@ -138,12 +138,7 @@ export async function runResaleMonitor({ config, pool, store, categories = ["all
   onProgress({ processed: 0, total: selectedOffers.length, categories: [...selectedCategories], trigger });
 
   for (let index = 0; index < selectedOffers.length; index += 1) {
-    // Full-store scans never wait minutes on one blocked product. Record the
-    // failure and move on; a later scheduled/manual pass can retry it.
-    let result = await inspectOffer(activeStore, selectedOffers[index], {
-      retryDelays: [0],
-      timeoutMs: 25_000,
-    });
+    let result = await inspectOffer(activeStore, selectedOffers[index]);
     const prior = previousByOffer.get(String(result.offer_id));
     if (result.status === "error" && prior && Array.isArray(prior.competitors)) {
       result = {
@@ -157,11 +152,8 @@ export async function runResaleMonitor({ config, pool, store, categories = ["all
     results.push(result);
     memoryResults.set(`${store.id}:${result.offer_id}`, result);
     await saveResaleResult(pool, result);
-    onProgress({ processed: index + 1, total: selectedOffers.length, current_offer_id: result.offer_id });
-    // The public JSON product feed is lightweight. A small pacing gap avoids
-    // bursts while keeping a 2,000-product queue practical. Browser fallback
-    // already carries its own, much slower timeout and global queue.
-    if (index + 1 < selectedOffers.length) await sleep(500 + Math.floor(Math.random() * 500));
+    onProgress({ processed: index + 1, total: offers.length, current_offer_id: result.offer_id });
+    if (index + 1 < selectedOffers.length) await sleep(8_000);
   }
   return {
     store_id: store.id,

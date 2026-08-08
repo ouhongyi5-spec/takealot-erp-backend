@@ -6,6 +6,7 @@ import { takealotRequest } from "./takealot.js";
 import { verifyWebhookSignature } from "./webhook.js";
 import { getResaleResults, runResaleMonitor, startResaleMonitor } from "./resale.js";
 import { listPricingRules, pricingJob, savePricingRule, startEnabledPricing } from "./pricing.js";
+import { productPageRuntimeState } from "./product-page.js";
 
 function getEventType(payload) {
   return payload?.event || payload?.event_type || payload?.type || null;
@@ -53,6 +54,7 @@ export function createApp({ config, pool = null }) {
       seller: result.ok ? result.data : undefined,
       error: result.ok ? undefined : result.data,
       database: pool ? "configured" : "not_configured",
+      collector: productPageRuntimeState(),
     });
   });
 
@@ -65,6 +67,7 @@ export function createApp({ config, pool = null }) {
       status: result.status,
       data: result.data,
       store_id: selected.storeId,
+      collector: productPageRuntimeState(),
     });
   });
 
