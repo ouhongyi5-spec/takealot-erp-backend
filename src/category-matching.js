@@ -71,6 +71,10 @@ function buildCandidateCatalog(rows) {
   }
   return { list, exact, storefront, suffix, leaf };
 }
+export function categoryCandidateCount(catalog) {
+  if (Array.isArray(catalog)) return catalog.length;
+  return Array.isArray(catalog?.list) ? catalog.list.length : 0;
+}
 function overlap(left, right) {
   const rightSet = new Set(right);
   return left.filter((item) => rightSet.has(item));
@@ -243,7 +247,7 @@ async function runMatching(pool) {
   matchJob.running = true; matchJob.status = "running"; matchJob.processed = 0; matchJob.started_at = new Date().toISOString(); matchJob.last_error = null;
   try {
     const candidates = await loadCandidates(pool);
-    if (!candidates.length) throw new Error("No current seller-portal level-3 categories are available");
+    if (!categoryCandidateCount(candidates)) throw new Error("No current seller-portal full-path categories are available");
     const rules = (await pool.query("SELECT * FROM market_category_mapping_rules WHERE enabled=TRUE ORDER BY decision_source='manual' DESC,id DESC")).rows;
     matchJob.total = Number((await pool.query("SELECT COUNT(*)::int AS count FROM market_products WHERE category_match_status='pending'")).rows[0]?.count || 0);
     await refreshMatchState(pool, "running");

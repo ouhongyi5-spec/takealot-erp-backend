@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { categoryMatchBand, recommendCategoryForProduct } from "../src/category-matching.js";
+import { categoryCandidateCount, categoryMatchBand, recommendCategoryForProduct } from "../src/category-matching.js";
 
 const candidates = [
   { id: "controllers", name: "Gaming Controllers", path: [{ id: "e", name: "Consumer Electronics" }, { id: "g", name: "Gaming" }, { id: "controllers", name: "Gaming Controllers" }], deep_leaf_names: ["Wireless Controllers", "Gamepads"] },
   { id: "projectors", name: "Projectors", path: [{ id: "e", name: "Consumer Electronics" }, { id: "tv", name: "TV & Audio" }, { id: "projectors", name: "Projectors" }], deep_leaf_names: ["Portable Projectors"] },
 ];
+
+test("recognizes the indexed full-path catalog as non-empty before starting a match run", () => {
+  assert.equal(categoryCandidateCount({ list: [{ path_id: "wigs-path" }] }), 1);
+  assert.equal(categoryCandidateCount({ list: [] }), 0);
+});
 
 test("recommends a current category without confirming or replacing the original category", () => {
   const product = { title: "Wireless Gaming Controller for Console", original_category_id: "old-gamepads", original_category_path: [{ id: "old", name: "Game Controllers" }] };
