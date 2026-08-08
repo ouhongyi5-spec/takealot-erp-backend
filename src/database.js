@@ -136,6 +136,8 @@ export async function initializeDatabase(pool) {
       is_leaf BOOLEAN NOT NULL DEFAULT FALSE,
       is_excluded BOOLEAN NOT NULL DEFAULT FALSE,
       sync_status TEXT NOT NULL DEFAULT 'pending',
+      source TEXT NOT NULL DEFAULT 'navigation',
+      source_path TEXT,
       discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -151,6 +153,7 @@ export async function initializeDatabase(pool) {
       excluded_count INTEGER NOT NULL DEFAULT 0,
       remapped_count INTEGER NOT NULL DEFAULT 0,
       pending_remap_count INTEGER NOT NULL DEFAULT 0,
+      schema_version INTEGER NOT NULL DEFAULT 1,
       last_error TEXT,
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
@@ -173,6 +176,9 @@ export async function initializeDatabase(pool) {
 
   await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_path JSONB NOT NULL DEFAULT '[]'::jsonb");
   await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS classification_status TEXT NOT NULL DEFAULT 'pending'");
+  await pool.query("ALTER TABLE market_category_nodes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'navigation'");
+  await pool.query("ALTER TABLE market_category_nodes ADD COLUMN IF NOT EXISTS source_path TEXT");
+  await pool.query("ALTER TABLE market_category_sync_state ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1");
   await pool.query(
     `INSERT INTO market_category_sync_state (id,status) VALUES ('takealot','pending')
      ON CONFLICT (id) DO NOTHING`,

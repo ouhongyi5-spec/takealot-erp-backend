@@ -4,6 +4,59 @@ const jobs = { running: false, category: null, started_at: null, last_error: nul
 const categoryJob = { running: false, phase: null, started_at: null, last_error: null };
 
 const BOOK_NAMES = /^(books?|books & media|boeke|图书)$/i;
+const CATEGORY_SYNC_SCHEMA = 2;
+
+export function extractMerchandisedDepartments(payload) {
+  return (Array.isArray(payload?.merchandised_departments) ? payload.merchandised_departments : [])
+    .filter((item) => item?.department_id && item?.name && item?.slug)
+    .map((item) => ({
+      id: `department:${item.slug}`,
+      name: String(item.name).trim(),
+      parent_id: null,
+      level: 1,
+      path: [{ id:`department:${item.slug}`,name:String(item.name).trim() }],
+      is_leaf: false,
+      source: "navigation",
+      source_path: String(item.slug),
+    }));
+}
+
+function categoryIdFromParameters(parameters = {}) {
+  return parameters?.search?.filters?.Category || parameters?.filters?.Category || null;
+}
+
+export function extractCmsCategoryNodes(payload, parent) {
+  const nodes = [];
+  const pagePaths = new Set();
+  const parentPath = Array.isArray(parent?.path) ? parent.path : [];
+  const add = (node) => {
+    const key = `${node.id}:${node.parent_id || ""}`;
+    if (!nodes.some((item) => `${item.id}:${item.parent_id || ""}` === key)) nodes.push(node);
+  };
+  const walk = (value) => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    const title = String(value.display_name || value.title || "").trim();
+    const link = value.link_data || value.event;
+    const parameters = link?.parameters || {};
+    const categoryId = categoryIdFromParameters(parameters);
+    if (title && categoryId) {
+      const id = String(categoryId);
+      add({ id,name:title,parent_id:parent.id,level:parent.level+1,path:[...parentPath,{id,name:title}],is_leaf:true,source:"navigation",source_path:null });
+    }
+    if (title && link?.action === "page") {
+      const slug = String(parameters.slug || parameters.path || "").replace(/^\/+|\/+$/g, "");
+      if (slug && slug !== parent.source_path && !pagePaths.has(slug)) {
+        pagePaths.add(slug);
+        const id = `page:${slug}`;
+        add({ id,name:title,parent_id:parent.id,level:parent.level+1,path:[...parentPath,{id,name:title}],is_leaf:false,source:"navigation",source_path:slug });
+      }
+    }
+    Object.values(value).forEach(walk);
+  };
+  walk(payload?.page?.widgets || []);
+  return nodes;
+}
 
 function categoryChildren(value) {
   if (!value || typeof value !== "object") return [];
@@ -45,11 +98,12 @@ async function upsertCategoryNodes(pool, nodes) {
   for (const node of nodes) {
     const book = isBookPath(node.path); if (book) excluded += 1;
     await pool.query(
-      `INSERT INTO market_category_nodes (id,name,parent_id,level,path,is_leaf,is_excluded,sync_status,updated_at)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,NOW())
+      `INSERT INTO market_category_nodes (id,name,parent_id,level,path,is_leaf,is_excluded,sync_status,source,source_path,updated_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,NOW())
        ON CONFLICT (id) DO UPDATE SET name=excluded.name,parent_id=excluded.parent_id,level=excluded.level,
-         path=excluded.path,is_leaf=excluded.is_leaf,is_excluded=excluded.is_excluded,updated_at=NOW()`,
-      [node.id,node.name,node.parent_id,node.level,JSON.stringify(node.path),node.is_leaf,book,book || node.is_leaf ? "complete" : "pending"],
+         path=excluded.path,is_leaf=excluded.is_leaf,is_excluded=excluded.is_excluded,source=excluded.source,
+         source_path=excluded.source_path,updated_at=NOW()`,
+      [node.id,node.name,node.parent_id,node.level,JSON.stringify(node.path),node.is_leaf,book,book || node.is_leaf ? "complete" : "pending",node.source || "navigation",node.source_path || null],
     );
   }
   return excluded;
@@ -59,31 +113,37 @@ export async function runCategorySyncStep(pool) {
   if (!pool || categoryJob.running) return { accepted:false,...categoryJob };
   categoryJob.running = true; categoryJob.started_at = new Date().toISOString(); categoryJob.last_error = null;
   try {
-    await pool.query("UPDATE market_category_sync_state SET status='running',started_at=COALESCE(started_at,NOW()),updated_at=NOW() WHERE id='takealot'");
-    const seedPaths = (await pool.query("SELECT category_path AS path FROM market_categories WHERE jsonb_array_length(category_path)>0")).rows;
-    const knownNodes = seedPaths.flatMap(({ path }) => (Array.isArray(path) ? path : []).map((item,index,all) => ({ id:String(item.id),name:String(item.name),parent_id:index ? String(all[index-1].id) : null,level:index+1,path:all.slice(0,index+1).map((entry) => ({id:String(entry.id),name:String(entry.name)})),is_leaf:index===all.length-1 })));
-    if (knownNodes.length) await upsertCategoryNodes(pool, knownNodes);
-
-    let pending = (await pool.query("SELECT * FROM market_category_nodes WHERE is_excluded=FALSE AND is_leaf=FALSE AND sync_status='pending' ORDER BY level,id LIMIT 1")).rows[0];
-    categoryJob.phase = pending ? "discover" : "bootstrap";
-    const params = new URLSearchParams();
-    if (pending) params.set("filter", `Category:${pending.id}`);
-    const payload = await publicRequest(`/searches/products?${params}`);
-    const extracted = extractCategoryTree(payload);
-    let scoped = pending ? extracted.filter((node) => node.parent_id === pending.id || node.path.some((part) => String(part.id) === pending.id)) : extracted;
-    if (pending && !scoped.length && extracted.length) {
-      const pendingPath = Array.isArray(pending.path) ? pending.path : [];
-      const extractedIds = new Set(extracted.map((node) => node.id));
-      scoped = extracted.map((node) => {
-        const externalParent = !node.parent_id || !extractedIds.has(node.parent_id);
-        const suffix = node.path.map((part) => ({ id:String(part.id),name:String(part.name) }));
-        return externalParent
-          ? { ...node,parent_id:pending.id,level:pendingPath.length+1,path:[...pendingPath,...suffix] }
-          : { ...node,level:pendingPath.length+node.level,path:[...pendingPath,...suffix] };
-      });
+    const state = (await pool.query("SELECT * FROM market_category_sync_state WHERE id='takealot'")).rows[0];
+    if (Number(state?.schema_version || 1) < CATEGORY_SYNC_SCHEMA) {
+      await pool.query("DELETE FROM market_category_nodes");
+      await pool.query("UPDATE market_category_sync_state SET status='pending',schema_version=$1,discovered_count=0,excluded_count=0,completed_at=NULL,last_error=NULL,started_at=NOW(),updated_at=NOW() WHERE id='takealot'", [CATEGORY_SYNC_SCHEMA]);
     }
-    await upsertCategoryNodes(pool, scoped.length ? scoped : extracted);
-    if (pending) await pool.query("UPDATE market_category_nodes SET sync_status='complete',is_leaf=$2,updated_at=NOW() WHERE id=$1", [pending.id, scoped.length === 0]);
+    await pool.query("UPDATE market_category_sync_state SET status='running',started_at=COALESCE(started_at,NOW()),updated_at=NOW() WHERE id='takealot'");
+
+    let pending = (await pool.query("SELECT * FROM market_category_nodes WHERE source='navigation' AND is_excluded=FALSE AND is_leaf=FALSE AND sync_status='pending' ORDER BY level,id LIMIT 1")).rows[0];
+    if (!pending) {
+      const rootCount = Number((await pool.query("SELECT COUNT(*)::int AS count FROM market_category_nodes WHERE level=1 AND source='navigation'")).rows[0]?.count || 0);
+      if (rootCount === 0) {
+        categoryJob.phase = "departments";
+        const payload = await publicRequest("/cms/merchandised-departments?display_only=True");
+        const departments = extractMerchandisedDepartments(payload);
+        if (departments.length < 20 || !departments.some((node) => BOOK_NAMES.test(node.name))) throw new Error(`Navigation completeness check failed: ${departments.length} departments, Books missing`);
+        await upsertCategoryNodes(pool, departments);
+      }
+    } else {
+      categoryJob.phase = "navigation";
+      const payload = await publicRequest(`/cms/pages/${pending.source_path}?platform=desktop`);
+      const children = extractCmsCategoryNodes(payload, pending);
+      await upsertCategoryNodes(pool, children);
+      await pool.query("UPDATE market_category_nodes SET sync_status='complete',is_leaf=$2,updated_at=NOW() WHERE id=$1", [pending.id, children.length === 0]);
+    }
+
+    pending = (await pool.query("SELECT * FROM market_category_nodes WHERE source='navigation' AND is_excluded=FALSE AND is_leaf=FALSE AND sync_status='pending' ORDER BY level,id LIMIT 1")).rows[0];
+    if (!pending) {
+      const seedPaths = (await pool.query("SELECT category_path AS path FROM market_categories WHERE jsonb_array_length(category_path)>0")).rows;
+      const knownNodes = seedPaths.flatMap(({ path }) => (Array.isArray(path) ? path : []).map((item,index,all) => ({ id:String(item.id),name:String(item.name),parent_id:index ? String(all[index-1].id) : null,level:index+1,path:all.slice(0,index+1).map((entry) => ({id:String(entry.id),name:String(entry.name)})),is_leaf:index===all.length-1,source:"product",source_path:null })));
+      if (knownNodes.length) await upsertCategoryNodes(pool, knownNodes);
+    }
 
     await pool.query(
       `UPDATE market_products p SET category_path=c.path,classification_status='mapped'
@@ -91,9 +151,11 @@ export async function runCategorySyncStep(pool) {
     );
     const stats = (await pool.query(`SELECT COUNT(*)::int AS discovered,COUNT(*) FILTER (WHERE is_excluded)::int AS excluded,COUNT(*) FILTER (WHERE NOT is_excluded AND sync_status='pending')::int AS pending FROM market_category_nodes`)).rows[0];
     const remap = (await pool.query(`SELECT COUNT(*) FILTER (WHERE classification_status='mapped')::int AS mapped,COUNT(*) FILTER (WHERE classification_status<>'mapped')::int AS pending FROM market_products`)).rows[0];
-    const complete = Number(stats.pending) === 0;
+    const integrity = (await pool.query(`SELECT COUNT(*) FILTER (WHERE level=1 AND source='navigation')::int AS roots,COUNT(*) FILTER (WHERE is_excluded AND level=1)::int AS excluded_roots,MAX(level)::int AS max_level FROM market_category_nodes`)).rows[0];
+    const complete = Number(stats.pending) === 0 && Number(integrity.roots) >= 20 && Number(integrity.excluded_roots) >= 1 && Number(integrity.max_level) >= 2;
+    if (Number(stats.pending) === 0 && !complete) throw new Error(`Category tree integrity failed: roots=${integrity.roots}, books=${integrity.excluded_roots}, levels=${integrity.max_level}`);
     await pool.query(`UPDATE market_category_sync_state SET status=$1,discovered_count=$2,excluded_count=$3,remapped_count=$4,pending_remap_count=$5,completed_at=CASE WHEN $1='complete' THEN NOW() ELSE completed_at END,last_error=NULL,updated_at=NOW() WHERE id='takealot'`, [complete ? "complete" : "running",stats.discovered,stats.excluded,remap.mapped,remap.pending]);
-    return { accepted:true,complete,...stats,remapped:remap.mapped,pending_remap:remap.pending };
+    return { accepted:true,complete,...stats,...integrity,remapped:remap.mapped,pending_remap:remap.pending };
   } catch (error) {
     categoryJob.last_error = error instanceof Error ? error.message : String(error);
     await pool.query("UPDATE market_category_sync_state SET status='failed',last_error=$1,updated_at=NOW() WHERE id='takealot'", [categoryJob.last_error]).catch(() => {});
