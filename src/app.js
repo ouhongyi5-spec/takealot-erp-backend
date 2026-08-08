@@ -37,6 +37,7 @@ export function createApp({ config, pool = null }) {
   app.get("/", (_req, res) => {
     res.json({
       service: "Takealot ERP Backend",
+      version: "7.1.1",
       status: "ok",
       documentation: "/health",
     });
@@ -138,7 +139,7 @@ export function createApp({ config, pool = null }) {
   });
   app.post("/api/takealot/market/category-matches/run", express.json({ limit: "20kb" }), async (_req, res) => {
     if (!pool) return res.status(503).json({ error: "Database not configured" });
-    try { return res.status(202).json({ ok: true, ...(await startCategoryMatching(pool)) }); }
+    try { return res.status(202).json({ ok: true, ...(await startCategoryMatching(pool, { resetUnconfirmed: _req.body?.reset_unconfirmed === true })) }); }
     catch (error) { return res.status(409).json({ error: error instanceof Error ? error.message : "匹配任务无法启动" }); }
   });
   app.post("/api/takealot/market/category-matches/:plid/confirm", express.json({ limit: "50kb" }), async (req, res) => {

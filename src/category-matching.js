@@ -94,13 +94,19 @@ function recommend(product, candidates, rulesByCategory) {
   const best = ranked[0];
   if (!best || best.score < 35) return null;
   const second = ranked[1]?.score || 0;
-  const separation = Math.min(6, Math.max(0, best.score - second));
-  const confidence = Math.min(98, best.score + separation);
+  const gap = Math.max(0, best.score - second);
+  const separation = Math.min(6, gap);
+  let confidence = Math.min(98, best.score + separation);
+  const ambiguous = ranked.length > 1 && gap <= 2;
+  if (ambiguous) confidence = Math.min(confidence, 79);
+  const evidence = ambiguous
+    ? [...best.evidence, "存在同分或近似同分候选，需人工确认"]
+    : best.evidence;
   return {
     category: best.candidate,
     confidence,
     method: "keyword_path_v1",
-    evidence: best.evidence,
+    evidence,
     ruleKeywords: best.ruleKeywords,
     alternatives: ranked.slice(1, 3).map((entry) => ({ id: entry.candidate.id, name: entry.candidate.name, path: entry.candidate.path, confidence: entry.score, evidence: entry.evidence, keywords: entry.ruleKeywords })),
   };
@@ -181,13 +187,29 @@ async function runMatching(pool) {
   } finally { matchJob.running = false; }
 }
 
-export async function startCategoryMatching(pool) {
+async function resetUnconfirmedRecommendations(pool) {
+  await pool.query(
+    `UPDATE market_products SET recommended_category_id=NULL,recommended_category_path='[]'::jsonb,
+       recommended_candidates='[]'::jsonb,category_match_confidence=NULL,category_match_method=NULL,
+       category_match_evidence='[]'::jsonb,category_match_status='pending',category_matched_at=NULL
+     WHERE current_category_id IS NULL`,
+  );
+  matchJob.status = "ready_not_started";
+  matchJob.processed = 0;
+  matchJob.total = 0;
+  matchJob.started_at = null;
+  matchJob.last_error = null;
+  await refreshMatchState(pool, "ready_not_started");
+}
+
+export async function startCategoryMatching(pool, options = {}) {
   if (!pool) throw new Error("Database not configured");
   if (matchJob.running) return { accepted: false, job: { ...matchJob } };
   const catalog = (await pool.query("SELECT status,source,active_version_id FROM market_category_sync_state WHERE id='takealot'")).rows[0];
   if (catalog?.status !== "complete" || catalog?.source !== "seller_portal") throw new Error("Current seller-portal category catalog is not ready");
+  if (options.resetUnconfirmed === true) await resetUnconfirmedRecommendations(pool);
   void runMatching(pool);
-  return { accepted: true, job: { ...matchJob } };
+  return { accepted: true, reset_unconfirmed: options.resetUnconfirmed === true, job: { ...matchJob } };
 }
 
 export async function categoryMatchingStatus(pool) {

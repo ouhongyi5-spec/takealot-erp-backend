@@ -28,3 +28,19 @@ test("uses the agreed confidence bands", () => {
   assert.equal(categoryMatchBand(80), "review");
   assert.equal(categoryMatchBand(79), "calibration");
 });
+
+test("downgrades equally scored categories on different paths to calibration", () => {
+  const product = {
+    title: "Portable Mini Projector",
+    original_category_id: "old-projector",
+    original_category_path: [{ id: "old", name: "Projector" }],
+  };
+  const duplicateLeafCandidates = [
+    { id: "consumer-projectors", name: "Projectors", path: [{ id: "e", name: "Consumer Electronics" }, { id: "tv", name: "TV & Audio" }, { id: "consumer-projectors", name: "Projectors" }] },
+    { id: "office-projectors", name: "Projectors", path: [{ id: "o", name: "Office & Business" }, { id: "f", name: "Office Furniture" }, { id: "office-projectors", name: "Projectors" }] },
+  ];
+  const result = recommendCategoryForProduct(product, duplicateLeafCandidates);
+  assert.equal(result?.confidence, 79);
+  assert.match(result?.evidence.join(" ") || "", /同分或近似同分/);
+  assert.equal(result?.alternatives[0]?.confidence, 98);
+});
