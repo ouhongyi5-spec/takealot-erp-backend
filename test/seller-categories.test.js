@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import test from "node:test";
-import { extractSellerCategoryNodes, validateSellerCategoryTree } from "../src/seller-categories.js";
+import { extractSellerCategoryNodes, extractSellerCategoryPaths, validateSellerCategoryTree } from "../src/seller-categories.js";
 
 function fixture() {
   const departments = [];
@@ -49,4 +50,20 @@ test("rejects partial category payloads before replacing the current tree", () =
   const result = validateSellerCategoryTree(extractSellerCategoryNodes({ departments: [{ id: "one", name: "Only one" }] }));
   assert.equal(result.valid, false);
   assert.match(result.problems.join(" "), /department roots/);
+});
+
+test("imports the collected workbook as a three-level display tree while preserving full paths", async () => {
+  const payload = JSON.parse(await fs.readFile(new URL("../data/takealot-categories-2026-08-08.json", import.meta.url), "utf8"));
+  const nodes = extractSellerCategoryNodes(payload);
+  const paths = extractSellerCategoryPaths(payload);
+  const result = validateSellerCategoryTree(nodes, paths);
+  assert.equal(result.valid, true);
+  assert.equal(result.counts.max_level, 3);
+  assert.equal(result.counts.raw_max_level, 7);
+  assert.deepEqual(result.counts.by_level, { 1: 7, 2: 35, 3: 595, 4: 0, 5: 0, 6: 0 });
+  assert.equal(result.counts.full_paths, 9955);
+  assert.equal(result.counts.usable_paths, 5089);
+  assert.equal(result.counts.qualification_count, 216);
+  assert.equal(result.counts.special_count, 0);
+  assert.equal(nodes.some((node) => node.level > 3), false);
 });

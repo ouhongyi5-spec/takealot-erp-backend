@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+
 const BOOK_NAMES = /^(books?|books?\s*&\s*courses?|books?\s*&\s*media|boeke|图书)$/i;
 const SOURCE = "seller_portal";
 
@@ -5,6 +8,72 @@ const categoryJob = { running: false, phase: "awaiting_source", started_at: null
 
 function text(value) {
   return value == null ? "" : String(value).trim();
+}
+
+function stableId(prefix, names) {
+  return `${prefix}-${createHash("sha1").update(names.join("\u001f")).digest("hex").slice(0, 20)}`;
+}
+
+function nodePath(names) {
+  return names.map((name, index) => ({ id: stableId("seller-category", names.slice(0, index + 1)), name }));
+}
+
+function extractManualCatalog(payload) {
+  if (payload?.schema !== "takealot-manual-catalog-v1" || !Array.isArray(payload.departments)) return null;
+  const nodes = new Map();
+  const paths = [];
+  const putNode = (names, metadata = {}) => {
+    const path = nodePath(names);
+    const node = {
+      id: path.at(-1).id,
+      name: names.at(-1),
+      parent_id: path.length > 1 ? path.at(-2).id : null,
+      level: path.length,
+      path,
+      is_leaf: path.length === 3,
+      is_excluded: names.some((name) => BOOK_NAMES.test(name)),
+      requires_qualification: Boolean(metadata.requires_qualification),
+      is_special: Boolean(metadata.is_special),
+      source: SOURCE,
+    };
+    const existing = nodes.get(node.id);
+    nodes.set(node.id, existing ? {
+      ...existing,
+      requires_qualification: existing.requires_qualification || node.requires_qualification,
+      is_special: existing.is_special || node.is_special,
+    } : node);
+    return node;
+  };
+
+  for (const department of payload.departments) {
+    const departmentName = text(department?.name);
+    if (!departmentName) continue;
+    putNode([departmentName]);
+    for (const subdepartment of Array.isArray(department?.subdepartments) ? department.subdepartments : []) {
+      const subdepartmentName = text(subdepartment?.name);
+      if (!subdepartmentName) continue;
+      putNode([departmentName, subdepartmentName], { requires_qualification: subdepartment.requires_qualification });
+      for (const entry of Array.isArray(subdepartment?.paths) ? subdepartment.paths : []) {
+        const segments = Array.isArray(entry?.segments) ? entry.segments.map(text).filter(Boolean) : [];
+        if (!segments.length) continue;
+        const canonicalNames = [departmentName, subdepartmentName, segments[0]];
+        const canonical = putNode(canonicalNames);
+        const fullNames = [departmentName, subdepartmentName, ...segments];
+        const excluded = fullNames.some((name) => BOOK_NAMES.test(name));
+        paths.push({
+          path_id: stableId("seller-path", fullNames),
+          canonical_category_id: canonical.id,
+          full_path: nodePath(fullNames),
+          leaf_name: fullNames.at(-1),
+          depth: fullNames.length,
+          requires_qualification: Boolean(entry.requires_qualification),
+          is_special: Boolean(entry.is_special),
+          is_excluded: excluded,
+        });
+      }
+    }
+  }
+  return { nodes: [...nodes.values()], paths };
 }
 
 function rawChildren(value) {
@@ -37,6 +106,8 @@ function candidateRoots(payload) {
 }
 
 export function extractSellerCategoryNodes(payload) {
+  const manual = extractManualCatalog(payload);
+  if (manual) return manual.nodes;
   const roots = candidateRoots(payload);
   const nodes = [];
   const seen = new Set();
@@ -71,7 +142,11 @@ export function extractSellerCategoryNodes(payload) {
   return nodes;
 }
 
-export function validateSellerCategoryTree(nodes) {
+export function extractSellerCategoryPaths(payload) {
+  return extractManualCatalog(payload)?.paths ?? [];
+}
+
+export function validateSellerCategoryTree(nodes, paths = []) {
   const included = nodes.filter((node) => !node.is_excluded);
   const roots = nodes.filter((node) => node.level === 1);
   const usableRoots = included.filter((node) => node.level === 1);
@@ -79,6 +154,11 @@ export function validateSellerCategoryTree(nodes) {
   const maxLevel = included.reduce((max, node) => Math.max(max, node.level), 0);
   const excludedBooks = nodes.filter((node) => node.is_excluded).length;
   const duplicateIds = nodes.length - new Set(nodes.map((node) => node.id)).size;
+  const usablePaths = paths.filter((path) => !path.is_excluded);
+  const qualificationCount = paths.filter((path) => path.requires_qualification).length
+    + nodes.filter((node) => node.level === 2 && node.requires_qualification).length;
+  const specialCount = paths.filter((path) => path.is_special).length;
+  const rawMaxLevel = paths.reduce((max, path) => Math.max(max, path.depth), maxLevel);
   const problems = [];
   if (roots.length < 5) problems.push(`only ${roots.length} department roots`);
   if (usableRoots.length < 4) problems.push(`only ${usableRoots.length} usable department roots`);
@@ -95,6 +175,11 @@ export function validateSellerCategoryTree(nodes) {
       selectable: leaves.length,
       max_level: maxLevel,
       by_level: Object.fromEntries([1, 2, 3, 4, 5, 6].map((level) => [level, included.filter((node) => node.level === level).length])),
+      full_paths: paths.length,
+      usable_paths: usablePaths.length,
+      qualification_count: qualificationCount,
+      special_count: specialCount,
+      raw_max_level: rawMaxLevel,
     },
   };
 }
@@ -102,7 +187,8 @@ export function validateSellerCategoryTree(nodes) {
 export async function importSellerCategoryTree(pool, payload, sourceRef = "seller-portal-http") {
   if (!pool) throw new Error("Database not configured");
   const nodes = extractSellerCategoryNodes(payload);
-  const validation = validateSellerCategoryTree(nodes);
+  const paths = extractSellerCategoryPaths(payload);
+  const validation = validateSellerCategoryTree(nodes, paths);
   if (!validation.valid) throw new Error(`Seller category tree rejected: ${validation.problems.join(", ")}`);
 
   const client = await pool.connect();
@@ -116,16 +202,36 @@ export async function importSellerCategoryTree(pool, payload, sourceRef = "selle
 
     await client.query("UPDATE market_category_versions SET status='superseded' WHERE source=$1 AND status='active' AND id<>$2", [SOURCE, version.id]);
     await client.query("UPDATE market_category_nodes SET is_current=FALSE WHERE source=$1", [SOURCE]);
+    await client.query("UPDATE market_category_paths SET is_current=FALSE WHERE source=$1", [SOURCE]);
 
     for (const node of nodes) {
       await client.query(
         `INSERT INTO market_category_nodes
-          (id,name,parent_id,level,path,is_leaf,is_excluded,sync_status,source,source_path,version_id,is_current,updated_at)
-         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,'complete',$8,$9,$10,TRUE,NOW())
+          (id,name,parent_id,level,path,is_leaf,is_excluded,sync_status,source,source_path,version_id,is_current,requires_qualification,is_special,updated_at)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,'complete',$8,$9,$10,TRUE,$11,$12,NOW())
          ON CONFLICT (id) DO UPDATE SET name=excluded.name,parent_id=excluded.parent_id,level=excluded.level,
            path=excluded.path,is_leaf=excluded.is_leaf,is_excluded=excluded.is_excluded,sync_status='complete',
-           source=excluded.source,source_path=excluded.source_path,version_id=excluded.version_id,is_current=TRUE,updated_at=NOW()`,
-        [node.id, node.name, node.parent_id, node.level, JSON.stringify(node.path), node.is_leaf, node.is_excluded, SOURCE, sourceRef, version.id],
+           source=excluded.source,source_path=excluded.source_path,version_id=excluded.version_id,is_current=TRUE,
+           requires_qualification=excluded.requires_qualification,is_special=excluded.is_special,updated_at=NOW()`,
+        [node.id, node.name, node.parent_id, node.level, JSON.stringify(node.path), node.is_leaf, node.is_excluded, SOURCE, sourceRef, version.id, Boolean(node.requires_qualification), Boolean(node.is_special)],
+      );
+    }
+
+    if (paths.length) {
+      const pathRows = paths.map((path) => ({ ...path, full_path: path.full_path, source: SOURCE, source_ref: sourceRef, version_id: Number(version.id) }));
+      await client.query(
+        `INSERT INTO market_category_paths
+          (path_id,canonical_category_id,full_path,leaf_name,depth,requires_qualification,is_special,is_excluded,source,source_ref,version_id,is_current,updated_at)
+         SELECT x.path_id,x.canonical_category_id,x.full_path,x.leaf_name,x.depth,x.requires_qualification,x.is_special,x.is_excluded,x.source,x.source_ref,x.version_id,TRUE,NOW()
+         FROM jsonb_to_recordset($1::jsonb) AS x(
+           path_id TEXT,canonical_category_id TEXT,full_path JSONB,leaf_name TEXT,depth INTEGER,
+           requires_qualification BOOLEAN,is_special BOOLEAN,is_excluded BOOLEAN,source TEXT,source_ref TEXT,version_id BIGINT)
+         ON CONFLICT (path_id) DO UPDATE SET canonical_category_id=excluded.canonical_category_id,
+           full_path=excluded.full_path,leaf_name=excluded.leaf_name,depth=excluded.depth,
+           requires_qualification=excluded.requires_qualification,is_special=excluded.is_special,
+           is_excluded=excluded.is_excluded,source=excluded.source,source_ref=excluded.source_ref,
+           version_id=excluded.version_id,is_current=TRUE,updated_at=NOW()`,
+        [JSON.stringify(pathRows)],
       );
     }
 
@@ -135,8 +241,11 @@ export async function importSellerCategoryTree(pool, payload, sourceRef = "selle
     await client.query(
       `UPDATE market_category_sync_state SET status='complete',source=$1,phase='catalog_ready',
        discovered_count=$2,excluded_count=$3,max_level=$4,level_counts=$5::jsonb,
-       active_version_id=$6,completed_at=NOW(),last_error=NULL,updated_at=NOW() WHERE id='takealot'`,
-      [SOURCE, validation.counts.total, validation.counts.excluded_books, validation.counts.max_level, JSON.stringify(validation.counts.by_level), version.id],
+       active_version_id=$6,full_path_count=$7,usable_path_count=$8,qualification_count=$9,
+       special_count=$10,raw_max_level=$11,completed_at=NOW(),last_error=NULL,updated_at=NOW() WHERE id='takealot'`,
+      [SOURCE, validation.counts.total, validation.counts.excluded_books, validation.counts.max_level, JSON.stringify(validation.counts.by_level), version.id,
+       validation.counts.full_paths, validation.counts.usable_paths, validation.counts.qualification_count,
+       validation.counts.special_count, validation.counts.raw_max_level],
     );
     await client.query("COMMIT");
     categoryJob.phase = "catalog_ready";
@@ -147,6 +256,18 @@ export async function importSellerCategoryTree(pool, payload, sourceRef = "selle
   } finally {
     client.release();
   }
+}
+
+export async function bootstrapBundledCategoryCatalog(pool, filePath) {
+  if (!pool || !filePath) return { imported: false, reason: "not_configured" };
+  const sourceRef = "complete-categories.xlsx:2026-08-08";
+  const active = (await pool.query(
+    "SELECT id FROM market_category_versions WHERE source=$1 AND source_ref=$2 AND status='active' ORDER BY id DESC LIMIT 1",
+    [SOURCE, sourceRef],
+  )).rows[0];
+  if (active) return { imported: false, reason: "already_current", version_id: active.id };
+  const payload = JSON.parse(await fs.readFile(filePath, "utf8"));
+  return { imported: true, ...(await importSellerCategoryTree(pool, payload, sourceRef)) };
 }
 
 function sellerHeaders(config) {

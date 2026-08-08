@@ -4,7 +4,7 @@ import { getConfig } from "./config.js";
 import { createDatabase, initializeDatabase } from "./database.js";
 import { startResaleMonitor } from "./resale.js";
 import { closeProductPageBrowser } from "./product-page.js";
-import { runSellerCategorySync } from "./seller-categories.js";
+import { bootstrapBundledCategoryCatalog, runSellerCategorySync } from "./seller-categories.js";
 
 const config = getConfig();
 const pool = createDatabase(config.databaseUrl);
@@ -14,6 +14,18 @@ try {
 } catch (error) {
   console.error("Database initialization failed", error);
   process.exit(1);
+}
+
+try {
+  const catalogPath = new URL("../data/takealot-categories-2026-08-08.json", import.meta.url);
+  const catalogResult = await bootstrapBundledCategoryCatalog(pool, catalogPath);
+  console.log("Bundled seller category catalog", catalogResult);
+} catch (error) {
+  console.error("Bundled seller category catalog import failed", error);
+  await pool?.query(
+    "UPDATE market_category_sync_state SET status='failed',phase='failed',last_error=$1,updated_at=NOW() WHERE id='takealot'",
+    [error instanceof Error ? error.message : String(error)],
+  ).catch(() => {});
 }
 
 const app = createApp({ config, pool });
