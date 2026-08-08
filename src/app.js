@@ -37,7 +37,7 @@ export function createApp({ config, pool = null }) {
   app.get("/", (_req, res) => {
     res.json({
       service: "Takealot ERP Backend",
-      version: "7.3.1",
+      version: "7.3.2",
       status: "ok",
       documentation: "/health",
     });

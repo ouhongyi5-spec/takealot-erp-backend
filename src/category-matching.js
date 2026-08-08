@@ -187,7 +187,17 @@ function legacyControllersRecommendation(product, productInfo, catalog) {
     return category ? {
       category,
       confidence,
-      method: "legacy_controllers_title_v3",
+      method: "legacy_controllers_title_v4",
+      evidence: ["原类目为 Controllers", reason],
+      alternatives: [],
+    } : null;
+  };
+  const recommendFullPath = (fullPath, confidence, reason) => {
+    const category = candidateAtPath(catalog, fullPath);
+    return category ? {
+      category,
+      confidence,
+      method: "legacy_controllers_title_v4",
       evidence: ["原类目为 Controllers", reason],
       alternatives: [],
     } : null;
@@ -199,7 +209,9 @@ function legacyControllersRecommendation(product, productInfo, catalog) {
   // words appearing later (for example "2 Pack Remote Controller with Case").
   const controllerIsAccessory = /\bcontrol+ers?\s+(?:case|cover|skin|shell|holder|stand|mount|charger|charging|cable|cord|adapter|adaptor|battery|replacement|repair|parts?)\b/i.test(rawTitle);
   const controllerIsPrimary = /^\s*(?:(?:\d+\s*)?(?:pack\s*)?)?(?:(?:generic|wireless|wired|bluetooth|game|gaming|remote|ps[1-5]|xbox|switch|wii)\s*)*control+ers?\b/i.test(rawTitle);
-  if (controllerIsPrimary && !controllerIsAccessory && gamingContext) {
+  const explicitCompleteController = /\b(?:wireless|wired|bluetooth|game|gaming|tri[- ]?mode|multiplatform|hall effect|simulation)\b[^,;]{0,40}\bcontrol+ers?\b/i.test(rawTitle);
+  const accessoryLeadsController = /\b(?:case|cover|shell|skin|dock|station|charger|cable|adapter|attachment|replacement|buttons?)\b[^,;]{0,45}\b(?:control+ers?|joy[ -]?con|game\s*pad)\b/i.test(rawTitle);
+  if (controllerIsPrimary && !controllerIsAccessory && !accessoryLeadsController && gamingContext) {
     return recommendPath(["Input Devices", "Game Controllers"], 98, "标题主体明确为完整游戏手柄，配套附件词不覆盖商品主体");
   }
 
@@ -207,7 +219,13 @@ function legacyControllersRecommendation(product, productInfo, catalog) {
   // the current seller catalog. Do not mislabel them as battery packs.
   if (/\bpower\s+supply\b/i.test(title) && gamingContext) return null;
 
-  if (/\b(game|retro)\s*stick\b|\bemulator(?:s| console)?\b|\b(?:mini\s+|retro\s+|handheld\s+|tv\s+)?(?:video\s+)?(?:game|gaming)\s*console\b|\b(?:tv|mini|handheld|retro)\s+console\b|\bhandheld\b.*\b(?:games?|gaming)\b/i.test(title)) {
+  // These are controller/console attachments or repair shells, not complete
+  // input devices. The current gaming catalog has no safe one-to-one leaf.
+  if (/\b(?:handle\s+attachment|attachment\s+set|steering\s+wheel\s+(?:kit|grip)|grip\s+handle\s+steering\s+wheel)\b/i.test(title)) return null;
+  if (/\b(?:front|rear|back|top|bottom|middle)\s+(?:cover|shell|panel)\b/i.test(title)) return null;
+  if (/\b(?:add[- ]?on\b[^,;]{0,30}\bwheel|dance\s+strap|shooting\s+grip|finger\s+sleeve|internal\s+heatsink|external\s+hdd\s+enclosure)\b/i.test(title)) return null;
+
+  if (/\b(game|retro)\s*stick\b|\bemulator(?:s| console)?\b|\b(?:mini\s+|retro\s+|handheld\s+|tv\s+)?(?:video\s+)?(?:game|gaming)\s*console\b|\b(?:tv|mini|handheld|retro)(?:\s+[a-z0-9-]+)?\s+console\b|\bpsp(?:-style)?\s+console\b|\bhandheld\b.*\b(?:games?|gaming)\b/i.test(title)) {
     return recommendPath(["Video Game Consoles", "Video Game Consoles"], 96, "标题表明商品是游戏主机或游戏棒，不是单独手柄");
   }
   if (/\bsensor\s*bar\b/i.test(title)) {
@@ -227,7 +245,10 @@ function legacyControllersRecommendation(product, productInfo, catalog) {
   if (/\b(?:battery|batteries)\s*(?:pack|packs|case|cover)?\b/i.test(title) && gamingContext) {
     return recommendPath(["Video Game Accessories", "Batteries聽& Battery Packs"], 94, "标题明确为游戏设备电池或电池盒");
   }
-  if (/\b(?:thumb\s*stick|thumbstick|joystick)\s*(?:cap|caps|grip|grips|cover|covers)|\bthumb\s+grips?\b/i.test(title)) {
+  if (/\bpower\s+bank\b/i.test(title) && gamingContext) {
+    return recommendPath(["Video Game Accessories", "Batteries聽& Battery Packs"], 94, "标题明确为游戏设备移动电源");
+  }
+  if (/\b(?:thumb\s*stick|thumbstick|joystick)\s*(?:thumb\s*)?(?:cap|caps|grip|grips|cover|covers)|\bthumb\s+grips?\b/i.test(title)) {
     return recommendPath(["Video Game Accessories", "Hardware Protection", "Covers & Thumb Grips"], 97, "标题明确为摇杆帽或拇指握把");
   }
   if (/\b(?:console\s+cover|face\s*plate|faceplate|decorative\s+strip)\b/i.test(title)) {
@@ -236,13 +257,38 @@ function legacyControllersRecommendation(product, productInfo, catalog) {
   if (/\b(?:replacement panel|frosted panel|console shell|protective console shell|housing case|replacement housing|dust cover)\b/i.test(title) && gamingContext) {
     return recommendPath(["Video Game Accessories", "Hardware Protection", "Console Covers"], 93, "标题表明商品是主机外壳或防尘盖，保留人工复核");
   }
+  if (/\bscreen\s+protector(?:s|\s+kit)?\b/i.test(title) && gamingContext) {
+    return recommendFullPath(
+      ["Consumer Electronics", "Electronic Accessories", "Screen Protectors", "Screen Protectors"],
+      96,
+      "标题明确为游戏设备屏幕保护膜",
+    );
+  }
   if (/\b(?:controller|game\s*pads?|joy[ -]?con|switch|ps[1-5]?|xbox|wii)\b.*\b(?:case|skin|silicone cover|protective cover|carry bag|storage bag)\b|\b(?:case|skin|silicone cover|protective cover|carry bag|storage bag)\b.*\b(?:controller|game\s*pads?|joy[ -]?con|switch|ps[1-5]?|xbox|wii)\b/i.test(title)) {
     return recommendPath(["Video Game Accessories", "Hardware Protection", "Cases"], 96, "标题明确为手柄保护壳或收纳包");
+  }
+  if (/\b(?:clear\s+cover|control+er\s+shell|shell\b[^,;]{0,30}\bjoy[ -]?con|game\s+card\s+case|card\s+holder)\b/i.test(title) && gamingContext) {
+    return recommendPath(["Video Game Accessories", "Hardware Protection", "Cases"], 96, "标题明确为手柄或游戏卡保护配件");
   }
   // Explicit repair components do not have a safe one-to-one destination in
   // the seller catalog. This guard must run before the generic cable rule.
   if (/\b(?:flex|fpc)\s*cable\b|\b(?:charging|hdmi|usb)\s+(?:port|board|socket)\b|\b(?:motherboard|circuit board|pcb|joystick module|analog module|conductive rubber|repair kit|replacement parts?)\b/i.test(title)) {
     return null;
+  }
+  // A storage-card bundle can mention an adapter in its subtitle. Classify it
+  // before the generic adapter rule; a reader without storage is a reader.
+  if (/\b(?:memory\s+card|card\s+reader|mx4sio\s+reader)\b/i.test(title) && gamingContext) {
+    if (/\b(?:\d+\s*(?:gb|mb)|fmcb|memory\s+card|mx4sio)\b/i.test(title)) {
+      return recommendPath(["Video Game Accessories", "Gaming Memory Cards"], 97, "标题明确为游戏存储卡或含存储容量的读卡套装");
+    }
+    return recommendFullPath(
+      ["Consumer Electronics", "Electronic Accessories", "Memory Card Readers", "Memory Card Readers"],
+      96,
+      "标题明确为独立存储卡读卡器",
+    );
+  }
+  if (/\b(?:arcade\b[^,;]{0,30}\bbuttons?|button\s+set|key caps?|switches?|gaming buttons?|game trigger buttons?|gaming triggers?|finger triggers?|triggers?\b[^,;]{0,30}\bbuttons?)\b/i.test(title)) {
+    return recommendPath(["Video Game Accessories", "Key Caps & Switches"], 88, "标题表明商品是按键或开关配件，保留人工复核");
   }
   if (/\b(?:cable|cord|adapter|adaptor|converter|dongle|receiver|connector)\b/i.test(title) && gamingContext
     && !/\b(?:controller|gamepad|joypad|joystick)\b.*\b(?:with|and|\+)\b.*\b(?:cable|cord)\b/i.test(title)) {
@@ -251,20 +297,18 @@ function legacyControllersRecommendation(product, productInfo, catalog) {
   if (/\b(?:rack|mount|wall mount|bracket|stand|holder|storage tower)\b/i.test(title) && gamingContext) {
     return recommendPath(["Video Game Accessories", "Racks & Mounts"], 94, "标题明确为游戏设备支架或挂架");
   }
-  if (/\b(?:chatpad|gaming keyboard|game keyboard|keyboard)\b/i.test(title) && gamingContext) {
+  if (/\b(?:chatpad|gaming keyboard|game keyboard|keyboard|keypad)\b/i.test(title)) {
     return recommendPath(["Input Devices", "Keyboards"], 96, "标题明确为游戏键盘或手柄键盘");
   }
   if (/\bgaming\s+(?:mouse|mice)\b/i.test(title)) {
     return recommendPath(["Input Devices", "Gaming Mice"], 97, "标题明确为游戏鼠标");
   }
-  if (/\b(?:memory\s+card|card\s+reader)\b/i.test(title) && gamingContext) {
-    return recommendPath(["Video Game Accessories", "Gaming Memory Cards"], 97, "标题明确为游戏存储卡");
+  // Strong complete-controller phrases can appear after a brand/model name.
+  // They run only after all specific accessory and console rules above.
+  if (explicitCompleteController && !controllerIsAccessory && !accessoryLeadsController && gamingContext) {
+    return recommendPath(["Input Devices", "Game Controllers"], 98, "标题主体明确为完整游戏手柄，配件词不覆盖商品主体");
   }
-  if (/\b(?:button set|key caps?|switches?|gaming buttons?|game trigger buttons?|gaming triggers?|finger triggers?)\b/i.test(title) && gamingContext) {
-    return recommendPath(["Video Game Accessories", "Key Caps & Switches"], 88, "标题表明商品是按键或开关配件，保留人工复核");
-  }
-
-  if (/\b(?:game\s*pads?|gaming pads?|joypads?|joysticks?|joy[ -]?cons?|nunchu[ck]+|dual\s*shock|dual\s*sense|xbox pad|split pad|game handle|arcade (?:stick|controller)|fight(?:ing)? stick|farm\s*stick|steering wheel|racing wheels?|game wheel|flight stick|hotas|handbrake|(?:sim\s+)?racing\b[^.]{0,40}\bpedals?)\b/i.test(title)) {
+  if (/\b(?:game\s*pads?|gaming pads?|joypads?|joysticks?|joy[ -]?cons?|nunchu[ck]+|dual\s*shock|dual\s*sense|xbox pad|split pad|game handle|arcade (?:stick|controller)|fight(?:ing)? stick|farm\s*stick|steering wheel|racing wheels?|game wheel|flight\s*stick|hotas|handbrake|wheel\b[^.]{0,40}\bpedals?|(?:sim\s+)?racing\b[^.]{0,40}\bpedals?)\b/i.test(title)) {
     return recommendPath(["Input Devices", "Game Controllers"], 98, "标题明确为完整游戏手柄或操控器");
   }
   if (/\b(?:control+ers?|joysticks?|remotes?)\b/i.test(title) && gamingContext) {

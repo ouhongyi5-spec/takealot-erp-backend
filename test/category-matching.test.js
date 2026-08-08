@@ -207,6 +207,20 @@ const controllerSplitCandidates = [
   gamingPath("sensor-bars", ["Video Game Accessories", "Sensor Bars"]),
   gamingPath("key-caps", ["Video Game Accessories", "Key Caps & Switches"]),
   gamingPath("memory-cards", ["Video Game Accessories", "Gaming Memory Cards"]),
+  {
+    id: "memory-card-readers",
+    name: "Electronic Accessories",
+    path_id: "memory-card-readers",
+    leaf_name: "Memory Card Readers",
+    path: ["Consumer Electronics", "Electronic Accessories", "Memory Card Readers", "Memory Card Readers"].map((name) => ({ name })),
+  },
+  {
+    id: "screen-protectors",
+    name: "Screen Protectors",
+    path_id: "screen-protectors",
+    leaf_name: "Screen Protectors",
+    path: ["Consumer Electronics", "Electronic Accessories", "Screen Protectors", "Screen Protectors"].map((name) => ({ name })),
+  },
 ];
 
 function legacyControllerProduct(title) {
@@ -237,12 +251,24 @@ for (const [title, expectedPath, minimumConfidence] of [
   ["Thrustmaster SimTask FarmStick PlayStation", "game-controllers", 95],
   ["Sim Racing Load Cell Pedals (3 Pedals) PC", "game-controllers", 95],
   ["32GB Card Reader with FMCB Compatible with PS2 Fat", "memory-cards", 95],
+  ["Transparent Card Reader Compatible with PS2 Orange", "memory-card-readers", 95],
+  ["8-in-1 Screen Protector Kit Compatible with Switch OLED", "screen-protectors", 95],
+  ["12Pieces Arcade Buttons 30mm Compatible with Joystick", "key-caps", 80],
+  ["Rubber Silicone Analog Thumbstick Thumb Cover Game Controller Case Skin", "thumb-grips", 95],
+  ["Mini wireless keyboard Compatible with controller", "keyboards", 95],
+  ["L433 Clear Cover Compatible with PS5 Controller", "cases", 95],
+  ["Gold Controller Shell Compatible with PS4", "cases", 95],
+  ["GA22 Trigger Gaming Mobile Controller Buttons for Smartphone Gaming", "key-caps", 80],
+  ["Thrustmaster Ambidextrous Sol R 1 Flightstick PC", "game-controllers", 95],
+  ["Thrustmaster T98P Ferrari 296 Wheel and Pedal", "game-controllers", 95],
+  ["128GB MX4SIO Reader Compatible with PS2 Slim", "memory-cards", 95],
+  ["Mad Catz C.A.T. 17 Customizable Ergonomic Game Controller", "game-controllers", 95],
 ]) {
   test(`splits legacy Controllers title into ${expectedPath}: ${title}`, () => {
     const result = recommendCategoryForProduct(legacyControllerProduct(title), controllerSplitCandidates);
     assert.equal(result?.category.path_id, expectedPath);
     assert.ok(Number(result?.confidence || 0) >= minimumConfidence);
-    assert.equal(result?.method, "legacy_controllers_title_v3");
+    assert.match(result?.method || "", /^legacy_controllers_title_v[34]$/);
   });
 }
 
@@ -266,3 +292,19 @@ test("does not classify a console replacement power supply as a battery pack", (
   );
   assert.equal(result, null);
 });
+
+for (const title of [
+  "For Elite Gamepad BDM-010 Front Cover Top Cover",
+  "Hyperkin Pro Handle Attachment Set for Nintendo Switch 2 Joy-Cons",
+  "2Pieces Steering Wheel Kit Compatible with Switch Red Blue",
+  "Compatible with Switch Joy-Con Ergonomic Grip Handle Steering Wheel",
+  "Thrustmaster Add-On Leather 28 GT Wheel PC Xbox PS4",
+  "Adjustable Dance Strap Compatible with Switch",
+  "Internal Heatsink Replacement Compatible with Switch",
+  "2TB External HDD Enclosure Compatible with PS4",
+]) {
+  test(`keeps a controller attachment unmatched: ${title}`, () => {
+    const result = recommendCategoryForProduct(legacyControllerProduct(title), controllerSplitCandidates);
+    assert.equal(result, null);
+  });
+}

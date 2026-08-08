@@ -1,5 +1,13 @@
 # Takealot ERP Backend
 
+## V7.3.2 Controllers 边界附件修复
+
+- 手柄前盖、顶部外壳、Joy-Con 手柄附件和方向盘握把套件保留未匹配，不再当作完整游戏手柄。
+- Arcade Buttons 优先归入 Key Caps & Switches，不再被 Joystick 词误导。
+- 含容量或 FMCB 的读卡套装优先归入 Gaming Memory Cards；独立读卡器归入 Memory Card Readers。
+- Switch 屏幕保护膜归入通用 Screen Protectors，不再误归保护壳。
+- 继续只生成建议，不自动确认、不修改 Takealot 线上类目；商品采集保持暂停。
+
 ## V7.3.1 Controllers 主体优先修复
 
 - 完整手柄标题优先于随附保护壳等附件词，避免把整套遥控手柄误归为保护壳。
