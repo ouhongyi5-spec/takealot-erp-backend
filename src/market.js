@@ -2,6 +2,15 @@ const PUBLIC_API_BASE = "https://api.takealot.com/rest/v-1-18-0";
 
 const jobs = { running: false, category: null, started_at: null, last_error: null };
 const categoryJob = { running: false, phase: null, started_at: null, last_error: null };
+const boundTestJob = { running: false, phase: "ready", started_at: null, last_error: null };
+
+export const BOUND_CATEGORY_TEST = Object.freeze({
+  id: "vacuum-sealers-v1",
+  public_category_id: "33636",
+  public_category_name: "Vacuum Sealers",
+  seller_path_names: ["HomeSmall Appliances", "Small Appliances", "Kitchen Appliances", "Vacuum Sealers"],
+  detail_sample_size: 20,
+});
 
 const BOOK_NAMES = /^(books?|books & media|boeke|图书)$/i;
 const CATEGORY_SYNC_SCHEMA = 2;
@@ -218,6 +227,171 @@ function normalizeProduct(product, categoryId) {
     in_stock: Boolean(stock.is_in_stock),
     stock_status: stock.status || null,
   };
+}
+
+function namesFromPath(path) {
+  return Array.isArray(path) ? path.map((node) => String(node?.name || "").trim()).filter(Boolean) : [];
+}
+
+export function validateBoundCategoryCollection({ reportedTotal, fetchedIds, detailLeafIds, expectedLeafId, sellerPathMatches }) {
+  const ids = Array.isArray(fetchedIds) ? fetchedIds.map(String).filter(Boolean) : [];
+  const uniqueIds = [...new Set(ids)];
+  const detailIds = Array.isArray(detailLeafIds) ? detailLeafIds.map(String) : [];
+  const detailMismatchCount = detailIds.filter((id) => id !== String(expectedLeafId)).length;
+  const result = {
+    reported_total: Number(reportedTotal || 0),
+    fetched_count: ids.length,
+    unique_count: uniqueIds.length,
+    duplicate_count: ids.length - uniqueIds.length,
+    detail_sample_count: detailIds.length,
+    detail_mismatch_count: detailMismatchCount,
+    seller_path_match_count: Number(sellerPathMatches || 0),
+  };
+  const problems = [];
+  if (result.reported_total < 1) problems.push("Takealot returned an empty category");
+  if (result.fetched_count !== result.reported_total) problems.push(`fetched ${result.fetched_count} of ${result.reported_total}`);
+  if (result.unique_count !== result.reported_total) problems.push(`only ${result.unique_count} unique PLIDs`);
+  if (result.duplicate_count !== 0) problems.push(`${result.duplicate_count} duplicate PLIDs`);
+  if (result.detail_sample_count < 1) problems.push("no product details were sampled");
+  if (result.detail_mismatch_count !== 0) problems.push(`${result.detail_mismatch_count} sampled products had another leaf category`);
+  if (result.seller_path_match_count !== 1) problems.push(`seller path matched ${result.seller_path_match_count} records`);
+  return { ok: problems.length === 0, problems, ...result };
+}
+
+async function resolveBoundSellerPath(pool) {
+  const rows = (await pool.query(
+    `SELECT canonical_category_id,full_path FROM market_category_paths
+     WHERE source='seller_portal' AND is_current=TRUE AND is_excluded=FALSE AND leaf_name=$1`,
+    [BOUND_CATEGORY_TEST.public_category_name],
+  )).rows;
+  const matches = rows.filter((row) => JSON.stringify(namesFromPath(row.full_path)) === JSON.stringify(BOUND_CATEGORY_TEST.seller_path_names));
+  return { matches, seller: matches[0] || null };
+}
+
+async function fetchBoundCategoryProducts() {
+  const rows = [];
+  let after = "";
+  let reportedTotal = 0;
+  for (let page = 0; page < 50; page += 1) {
+    const params = new URLSearchParams({ filter: `Category:${BOUND_CATEGORY_TEST.public_category_id}` });
+    if (after) params.set("after", after);
+    const listing = await publicRequest(`/searches/products?${params}`);
+    const pageRows = productRows(listing);
+    rows.push(...pageRows);
+    const paging = listing?.sections?.products?.paging || {};
+    reportedTotal = Number(paging.total_num_found || reportedTotal || rows.length);
+    const next = String(paging.next_is_after || "");
+    if (!next || next === after || pageRows.length === 0) break;
+    after = next;
+    if (page === 49) throw new Error("Category pagination exceeded the 50-page safety limit");
+  }
+  return { rows, reportedTotal };
+}
+
+async function sampleBoundCategoryDetails(items) {
+  const leafIds = [];
+  const sample = items.slice(0, BOUND_CATEGORY_TEST.detail_sample_size);
+  for (let start = 0; start < sample.length; start += 5) {
+    const batch = await Promise.all(sample.slice(start, start + 5).map(async (item) => {
+      const detail = await publicRequest(`/product-details/${item.plid}?platform=desktop`);
+      const breadcrumbs = Array.isArray(detail?.breadcrumbs?.items) ? detail.breadcrumbs.items : [];
+      return String(breadcrumbs.at(-1)?.id || "");
+    }));
+    leafIds.push(...batch);
+  }
+  return leafIds;
+}
+
+async function runBoundCategoryCollectionTest(pool) {
+  boundTestJob.running = true;
+  boundTestJob.phase = "validating_seller_path";
+  boundTestJob.started_at = new Date().toISOString();
+  boundTestJob.last_error = null;
+  try {
+    const { matches, seller } = await resolveBoundSellerPath(pool);
+    if (!seller || matches.length !== 1) throw new Error(`Expected one exact seller path, found ${matches.length}`);
+    await pool.query(
+      `INSERT INTO market_collection_tests
+        (id,public_category_id,public_category_name,seller_category_id,seller_category_path,status,started_at,completed_at,last_error,updated_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,'running',NOW(),NULL,NULL,NOW())
+       ON CONFLICT (id) DO UPDATE SET public_category_id=excluded.public_category_id,
+         public_category_name=excluded.public_category_name,seller_category_id=excluded.seller_category_id,
+         seller_category_path=excluded.seller_category_path,status='running',started_at=NOW(),
+         completed_at=NULL,last_error=NULL,updated_at=NOW()`,
+      [BOUND_CATEGORY_TEST.id, BOUND_CATEGORY_TEST.public_category_id, BOUND_CATEGORY_TEST.public_category_name, seller.canonical_category_id, JSON.stringify(seller.full_path)],
+    );
+    await pool.query("DELETE FROM market_collection_test_products WHERE test_id=$1", [BOUND_CATEGORY_TEST.id]);
+
+    boundTestJob.phase = "collecting";
+    const { rows, reportedTotal } = await fetchBoundCategoryProducts();
+    const items = rows.map((row) => normalizeProduct(row, BOUND_CATEGORY_TEST.public_category_id)).filter((item) => item.plid);
+    boundTestJob.phase = "checking_details";
+    const detailLeafIds = await sampleBoundCategoryDetails(items);
+    const validation = validateBoundCategoryCollection({
+      reportedTotal,
+      fetchedIds: items.map((item) => item.plid),
+      detailLeafIds,
+      expectedLeafId: BOUND_CATEGORY_TEST.public_category_id,
+      sellerPathMatches: matches.length,
+    });
+    if (!validation.ok) throw new Error(`Bound category validation failed: ${validation.problems.join(", ")}`);
+
+    boundTestJob.phase = "saving_staging";
+    const payload = items.map((item) => ({
+      ...item,
+      test_id: BOUND_CATEGORY_TEST.id,
+      public_category_id: BOUND_CATEGORY_TEST.public_category_id,
+      seller_category_id: seller.canonical_category_id,
+      seller_category_path: seller.full_path,
+    }));
+    await pool.query(
+      `INSERT INTO market_collection_test_products
+        (test_id,plid,tsin,public_category_id,seller_category_id,seller_category_path,title,subtitle,brand,image_url,product_url,price,listing_price,rating,reviews,in_stock,stock_status,collected_at)
+       SELECT x.test_id,x.plid,x.tsin,x.public_category_id,x.seller_category_id,x.seller_category_path,x.title,x.subtitle,x.brand,x.image_url,x.product_url,x.price,x.listing_price,x.rating,x.reviews,x.in_stock,x.stock_status,NOW()
+       FROM jsonb_to_recordset($1::jsonb) AS x(
+         test_id TEXT,plid TEXT,tsin TEXT,public_category_id TEXT,seller_category_id TEXT,seller_category_path JSONB,
+         title TEXT,subtitle TEXT,brand TEXT,image_url TEXT,product_url TEXT,price NUMERIC,listing_price NUMERIC,
+         rating NUMERIC,reviews INTEGER,in_stock BOOLEAN,stock_status TEXT)
+       ON CONFLICT (test_id,plid) DO UPDATE SET title=excluded.title,subtitle=excluded.subtitle,
+         brand=excluded.brand,image_url=excluded.image_url,product_url=excluded.product_url,
+         price=excluded.price,listing_price=excluded.listing_price,rating=excluded.rating,
+         reviews=excluded.reviews,in_stock=excluded.in_stock,stock_status=excluded.stock_status,
+         seller_category_id=excluded.seller_category_id,seller_category_path=excluded.seller_category_path,collected_at=NOW()`,
+      [JSON.stringify(payload)],
+    );
+    await pool.query(
+      `UPDATE market_collection_tests SET status='complete',reported_total=$2,fetched_count=$3,
+       unique_count=$4,duplicate_count=$5,detail_sample_count=$6,detail_mismatch_count=$7,
+       completed_at=NOW(),last_error=NULL,updated_at=NOW() WHERE id=$1`,
+      [BOUND_CATEGORY_TEST.id, validation.reported_total, validation.fetched_count, validation.unique_count,
+       validation.duplicate_count, validation.detail_sample_count, validation.detail_mismatch_count],
+    );
+    boundTestJob.phase = "complete";
+  } catch (error) {
+    boundTestJob.last_error = error instanceof Error ? error.message : String(error);
+    boundTestJob.phase = "failed";
+    await pool.query(
+      `INSERT INTO market_collection_tests (id,public_category_id,public_category_name,status,last_error,started_at,completed_at,updated_at)
+       VALUES ($1,$2,$3,'failed',$4,NOW(),NOW(),NOW())
+       ON CONFLICT (id) DO UPDATE SET status='failed',last_error=excluded.last_error,completed_at=NOW(),updated_at=NOW()`,
+      [BOUND_CATEGORY_TEST.id, BOUND_CATEGORY_TEST.public_category_id, BOUND_CATEGORY_TEST.public_category_name, boundTestJob.last_error],
+    ).catch(() => {});
+  } finally {
+    boundTestJob.running = false;
+  }
+}
+
+export async function startBoundCategoryCollectionTest(pool) {
+  if (!pool) throw new Error("Database not configured");
+  if (boundTestJob.running) return { accepted: false, already_running: true, job: { ...boundTestJob } };
+  void runBoundCategoryCollectionTest(pool);
+  return { accepted: true, destructive: false, target: BOUND_CATEGORY_TEST, job: { ...boundTestJob, running: true } };
+}
+
+export async function boundCategoryCollectionTestStatus(pool) {
+  const test = (await pool.query("SELECT * FROM market_collection_tests WHERE id=$1", [BOUND_CATEGORY_TEST.id])).rows[0] || null;
+  const staged = Number((await pool.query("SELECT COUNT(*)::int AS count FROM market_collection_test_products WHERE test_id=$1", [BOUND_CATEGORY_TEST.id])).rows[0]?.count || 0);
+  return { ok: true, destructive: false, target: BOUND_CATEGORY_TEST, test, staged_products: staged, job: { ...boundTestJob } };
 }
 
 async function resolveCategory(pool, category) {

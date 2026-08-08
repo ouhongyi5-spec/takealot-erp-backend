@@ -7,7 +7,7 @@ import { verifyWebhookSignature } from "./webhook.js";
 import { getResaleResults, runResaleMonitor, startResaleMonitor } from "./resale.js";
 import { listPricingRules, pricingJob, savePricingRule, startEnabledPricing } from "./pricing.js";
 import { productPageRuntimeState } from "./product-page.js";
-import { marketJobState, marketLibrary, marketProduct, runMarketCollectionStep } from "./market.js";
+import { marketJobState, marketLibrary, marketProduct, runMarketCollectionStep, startBoundCategoryCollectionTest, boundCategoryCollectionTestStatus } from "./market.js";
 import { categoryImportAuthorized, importSellerCategoryTree, runSellerCategorySync, sellerCategoryStatus } from "./seller-categories.js";
 import { categoryMatchingStatus, confirmCategoryMatch, listCategoryMatches, startCategoryMatching } from "./category-matching.js";
 
@@ -37,7 +37,7 @@ export function createApp({ config, pool = null }) {
   app.get("/", (_req, res) => {
     res.json({
       service: "Takealot ERP Backend",
-      version: "7.3.2",
+      version: "7.4.0",
       status: "ok",
       documentation: "/health",
     });
@@ -105,6 +105,16 @@ export function createApp({ config, pool = null }) {
   });
 
   app.get("/api/takealot/market/status", (_req, res) => res.json({ ok: true, job: marketJobState() }));
+  app.get("/api/takealot/market/category-collection-test", async (_req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.json(await boundCategoryCollectionTestStatus(pool)); }
+    catch (error) { return res.status(502).json({ error: error instanceof Error ? error.message : "类目试采状态加载失败" }); }
+  });
+  app.post("/api/takealot/market/category-collection-test", async (_req, res) => {
+    if (!pool) return res.status(503).json({ error: "Database not configured" });
+    try { return res.status(202).json({ ok: true, ...(await startBoundCategoryCollectionTest(pool)) }); }
+    catch (error) { return res.status(409).json({ error: error instanceof Error ? error.message : "类目试采无法启动" }); }
+  });
   app.post("/api/takealot/market/run-step", async (_req, res) => {
     if (!pool) return res.status(503).json({ error: "Database not configured" });
     if (!config.marketCollectionEnabled) return res.status(409).json({ error: "商品采集当前已暂停：请先完善并验收最新类目树", phase: "category_first" });

@@ -1,5 +1,21 @@
 # Takealot ERP Backend
 
+## V7.4 封口机类目绑定试采
+
+- 暂停 Controllers 规则继续开发和全部商品重算。
+- 新增固定的 `Vacuum Sealers` 隔离试采，不受全库商品采集开关影响。
+- 公开类目固定为 Takealot `Category:33636`，卖家后台完整路径固定为：
+  `HomeSmall Appliances / Small Appliances / Kitchen Appliances / Vacuum Sealers`。
+- 试采会读取该类目全部分页、校验总数、PLID 唯一性，并抽查20个商品详情末级类目。
+- 397个试采商品只写入独立测试表，不覆盖、确认或删除现有12,207个商品及历史快照。
+- 只有公开类目完整采集且卖家后台完整路径唯一命中时，测试状态才会变为 `complete`。
+- 本版本不包含旧库删除接口；必须先在生产环境验收试采结果，再单独执行事务性重建。
+
+### 试采接口
+
+- `POST /api/takealot/market/category-collection-test`：启动固定的封口机隔离试采。
+- `GET /api/takealot/market/category-collection-test`：查看进度、校验指标与测试区商品数。
+
 ## V7.3.2 Controllers 边界附件修复
 
 - 手柄前盖、顶部外壳、Joy-Con 手柄附件和方向盘握把套件保留未匹配，不再当作完整游戏手柄。

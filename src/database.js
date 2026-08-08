@@ -252,6 +252,49 @@ export async function initializeDatabase(pool) {
       captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (plid, snapshot_date)
     );
+
+    CREATE TABLE IF NOT EXISTS market_collection_tests (
+      id TEXT PRIMARY KEY,
+      public_category_id TEXT NOT NULL,
+      public_category_name TEXT NOT NULL,
+      seller_category_id TEXT,
+      seller_category_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+      status TEXT NOT NULL DEFAULT 'ready',
+      reported_total INTEGER NOT NULL DEFAULT 0,
+      fetched_count INTEGER NOT NULL DEFAULT 0,
+      unique_count INTEGER NOT NULL DEFAULT 0,
+      duplicate_count INTEGER NOT NULL DEFAULT 0,
+      detail_sample_count INTEGER NOT NULL DEFAULT 0,
+      detail_mismatch_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS market_collection_test_products (
+      test_id TEXT NOT NULL,
+      plid TEXT NOT NULL,
+      tsin TEXT,
+      public_category_id TEXT NOT NULL,
+      seller_category_id TEXT NOT NULL,
+      seller_category_path JSONB NOT NULL,
+      title TEXT,
+      subtitle TEXT,
+      brand TEXT,
+      image_url TEXT,
+      product_url TEXT,
+      price NUMERIC,
+      listing_price NUMERIC,
+      rating NUMERIC,
+      reviews INTEGER,
+      in_stock BOOLEAN,
+      stock_status TEXT,
+      collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (test_id, plid)
+    );
+    CREATE INDEX IF NOT EXISTS market_collection_test_products_category_idx
+      ON market_collection_test_products (test_id, public_category_id, plid);
   `);
 
   await pool.query("ALTER TABLE market_products ADD COLUMN IF NOT EXISTS category_path JSONB NOT NULL DEFAULT '[]'::jsonb");
