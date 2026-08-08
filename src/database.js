@@ -141,7 +141,9 @@ export async function initializeDatabase(pool) {
   await pool.query(
     `INSERT INTO market_categories (id,name,name_zh,seed_plid,status)
      VALUES ('seed-vacuum-sealers','Vacuum Sealers','封口机','PLID98517065','pending'),
-            ('seed-game-controllers','Game Controllers','游戏手柄','PLID100978533','pending')
+            ('seed-game-controllers','Game Controllers','游戏手柄','PLID100978533','pending'),
+            ('seed-projectors','Projectors','投影仪','PLID97106029','pending'),
+            ('seed-wigs','Wigs','假发','PLID93508632','pending')
      ON CONFLICT (id) DO NOTHING`,
   );
 }
