@@ -8,6 +8,7 @@ const matchJob = { running: false, status: "ready_not_started", processed: 0, to
 function text(value) { return value == null ? "" : String(value).trim(); }
 function normalizeToken(value) {
   const token = text(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (token === "gaming") return "game";
   if (token.length > 4 && token.endsWith("ies")) return `${token.slice(0, -3)}y`;
   if (token.length > 4 && token.endsWith("s") && !token.endsWith("ss")) return token.slice(0, -1);
   return token;
@@ -15,7 +16,61 @@ function normalizeToken(value) {
 function tokens(value) {
   return [...new Set(text(value).toLowerCase().split(/[^a-z0-9]+/g).map(normalizeToken).filter((token) => token.length > 1 && !STOPWORDS.has(token)))];
 }
-function pathNames(path) { return Array.isArray(path) ? path.map((node) => text(node?.name)).filter(Boolean) : []; }
+function splitPathName(value) {
+  return text(value).split(/\s*(?:->|→)\s*/g).map(text).filter(Boolean);
+}
+function pathNames(path) {
+  return Array.isArray(path) ? path.flatMap((node) => splitPathName(node?.name)).filter(Boolean) : [];
+}
+function normalizedPath(path) { return pathNames(path).map((name) => tokens(name).join("")).filter(Boolean); }
+function pathKey(parts) { return parts.join("/"); }
+function tailMatchCount(left, right) {
+  let count = 0;
+  while (count < left.length && count < right.length && left.at(-1 - count) === right.at(-1 - count)) count += 1;
+  return count;
+}
+function addIndex(index, key, candidate) {
+  if (!key) return;
+  const values = index.get(key) || [];
+  values.push(candidate);
+  index.set(key, values);
+}
+function distinctCandidates(values = []) {
+  if (!Array.isArray(values)) return [];
+  const seen = new Set();
+  return values.filter((candidate) => {
+    const key = candidate.path_id || `${candidate.id}:${pathKey(candidate._normalizedPath || [])}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function buildCandidateCatalog(rows) {
+  const list = rows.map((candidate) => {
+    const names = pathNames(candidate.path);
+    const leafName = candidate.leaf_name || names.at(-1) || candidate.name;
+    const normalized = normalizedPath(candidate.path);
+    return {
+      ...candidate,
+      _pathTokens: tokens(names.join(" ")),
+      _leafName: leafName,
+      _leafTokens: tokens(leafName),
+      _normalizedPath: normalized,
+    };
+  });
+  const exact = new Map();
+  const storefront = new Map();
+  const suffix = new Map();
+  const leaf = new Map();
+  for (const candidate of list) {
+    const parts = candidate._normalizedPath;
+    addIndex(exact, pathKey(parts), candidate);
+    if (parts.length > 1) addIndex(storefront, pathKey(parts.slice(1)), candidate);
+    for (let length = 2; length < parts.length; length += 1) addIndex(suffix, pathKey(parts.slice(-length)), candidate);
+    addIndex(leaf, parts.at(-1), candidate);
+  }
+  return { list, exact, storefront, suffix, leaf };
+}
 function overlap(left, right) {
   const rightSet = new Set(right);
   return left.filter((item) => rightSet.has(item));
@@ -32,64 +87,101 @@ function ruleApplies(rule, product, productTokens) {
   return Boolean(rule.legacy_category_id || conditions.length || attributes.brand);
 }
 
-function scoreCandidate(product, candidate) {
+function prepareProduct(product) {
   const title = text(`${product.title || ""} ${product.subtitle || ""} ${product.brand || ""}`);
-  const titleTokens = tokens(title);
   const originalNames = pathNames(product.original_category_path);
-  const originalTokens = tokens(originalNames.join(" "));
-  const originalLeaf = normalizeToken(originalNames.at(-1));
-  const candidateNames = pathNames(candidate.path);
-  const candidatePathTokens = candidate._pathTokens || tokens(candidateNames.join(" "));
-  const leafName = candidate._leafName || candidateNames.at(-1) || candidate.name;
-  const leafTokens = candidate._leafTokens || tokens(leafName);
-  const deepTokens = candidate._deepTokens || tokens((candidate.deep_leaf_names || []).join(" "));
+  return {
+    title,
+    titleTokens: tokens(title),
+    originalNames,
+    originalTokens: tokens(originalNames.join(" ")),
+    normalizedOriginalPath: normalizedPath(product.original_category_path),
+  };
+}
+
+function scoreCandidate(productInfo, candidate) {
+  const { title, titleTokens, originalTokens, normalizedOriginalPath } = productInfo;
+  const candidatePathTokens = candidate._pathTokens;
+  const leafName = candidate._leafName;
+  const leafTokens = candidate._leafTokens;
   const evidence = [];
   let ruleKeywords = [];
   let score = 0;
 
-  if (originalLeaf && originalLeaf === normalizeToken(leafName)) { score = 98; evidence.push("原末级类目名称一致"); }
+  const originalLeaf = normalizedOriginalPath.at(-1);
+  const candidateLeaf = candidate._normalizedPath.at(-1);
+  if (originalLeaf && originalLeaf === candidateLeaf) { score = 90; evidence.push("原末级类目名称一致"); }
   else {
     const titleLeaf = overlap(leafTokens, titleTokens);
     const legacyPath = overlap(originalTokens, candidatePathTokens);
     const titlePath = overlap(candidatePathTokens, titleTokens);
-    const titleDeep = overlap(titleTokens, deepTokens);
-    score += ratio(leafTokens, titleTokens) * 42;
-    score += ratio(originalTokens, candidatePathTokens) * 28;
+    score += ratio(leafTokens, titleTokens) * 40;
+    score += ratio(originalTokens, candidatePathTokens) * 32;
     score += Math.min(1, titlePath.length / 3) * 14;
-    score += Math.min(1, titleDeep.length / 3) * 10;
     if (leafName.length >= 5 && title.toLowerCase().includes(leafName.toLowerCase())) score += 12;
+    const originalLeafTokens = tokens(productInfo.originalNames.at(-1));
+    if (originalLeafTokens.length
+      && originalLeafTokens.every((token) => leafTokens.includes(token))
+      && leafTokens.every((token) => titleTokens.includes(token))) {
+      score += 12;
+      evidence.push("原末级类目与标题共同指向当前完整路径");
+    }
     if (titleLeaf.length) evidence.push(`标题命中：${titleLeaf.slice(0, 4).join("、")}`);
     if (legacyPath.length) evidence.push(`原类目命中：${legacyPath.slice(0, 4).join("、")}`);
-    if (titleDeep.length) evidence.push(`深层路径命中：${titleDeep.slice(0, 4).join("、")}`);
-    ruleKeywords = [...new Set([...titleLeaf, ...titleDeep])].slice(0, 5);
+    ruleKeywords = [...new Set(titleLeaf)].slice(0, 5);
+  }
+  const tailMatches = tailMatchCount(normalizedOriginalPath, candidate._normalizedPath);
+  if (tailMatches) {
+    score += Math.min(24, tailMatches * 8);
+    evidence.push(`末端路径连续命中${tailMatches}级`);
   }
   return { score: Math.min(98, Math.round(score)), evidence, ruleKeywords };
 }
 
 async function loadCandidates(pool) {
   const rows = (await pool.query(
-    `SELECT n.id,n.name,n.path,
-       COALESCE(array_agg(DISTINCT p.leaf_name) FILTER (WHERE p.leaf_name IS NOT NULL),'{}') AS deep_leaf_names
-     FROM market_category_nodes n
-     LEFT JOIN market_category_paths p ON p.canonical_category_id=n.id AND p.is_current=TRUE AND p.is_excluded=FALSE
-     WHERE n.source='seller_portal' AND n.is_current=TRUE AND n.is_excluded=FALSE AND n.level=3
-     GROUP BY n.id,n.name,n.path ORDER BY n.name`,
+    `SELECT n.id,n.name,p.path_id,p.full_path AS path,p.leaf_name,p.depth
+     FROM market_category_paths p
+     JOIN market_category_nodes n ON n.id=p.canonical_category_id
+     WHERE p.source='seller_portal' AND p.is_current=TRUE AND p.is_excluded=FALSE
+       AND n.source='seller_portal' AND n.is_current=TRUE AND n.is_excluded=FALSE AND n.level=3
+     ORDER BY p.leaf_name,p.path_id`,
   )).rows;
-  return rows.map((candidate) => {
-    const names = pathNames(candidate.path);
-    const leafName = names.at(-1) || candidate.name;
-    return { ...candidate, _pathTokens: tokens(names.join(" ")), _leafName: leafName, _leafTokens: tokens(leafName), _deepTokens: tokens((candidate.deep_leaf_names || []).join(" ")) };
-  });
+  return buildCandidateCatalog(rows);
 }
 
-function recommend(product, candidates, rulesByCategory) {
+function exactPathRecommendation(productInfo, catalog) {
+  const original = productInfo.normalizedOriginalPath;
+  if (!original.length) return null;
+  const key = pathKey(original);
+  const checks = [
+    [catalog.exact.get(key), 100, "full_path_exact_v2", "原类目与完整上传路径完全一致"],
+    [catalog.storefront.get(key), 99, "storefront_path_exact_v2", "商品页路径与完整上传路径一致，已补回隐藏的一级类目"],
+    [original.length >= 2 ? catalog.suffix.get(key) : null, 98, "path_suffix_exact_v2", "原类目与完整上传路径末端连续一致"],
+    [original.length === 1 ? catalog.leaf.get(original[0]) : null, 96, "unique_leaf_exact_v2", "原末级类目在完整类目库中唯一"],
+  ];
+  for (const [rawMatches, confidence, method, evidence] of checks) {
+    const matches = distinctCandidates(rawMatches);
+    if (matches.length === 1) return { category: matches[0], confidence, method, evidence: [evidence], alternatives: [] };
+  }
+  return null;
+}
+
+function recommend(product, inputCandidates, rulesByCategory) {
+  const catalog = Array.isArray(inputCandidates) ? buildCandidateCatalog(inputCandidates) : inputCandidates;
+  const candidates = catalog.list;
   const productTokens = tokens(`${product.title || ""} ${product.subtitle || ""} ${product.brand || ""}`);
+  const productInfo = prepareProduct(product);
   for (const rule of rulesByCategory) {
     if (!ruleApplies(rule, product, productTokens)) continue;
-    const current = candidates.find((candidate) => candidate.id === rule.current_category_id);
+    const currentOptions = candidates.filter((candidate) => candidate.id === rule.current_category_id);
+    const current = currentOptions.map((candidate) => ({ candidate, ...scoreCandidate(productInfo, candidate) }))
+      .sort((left, right) => right.score - left.score)[0]?.candidate;
     if (current) return { category: current, confidence: 100, method: "saved_rule", evidence: ["已确认永久规则"], alternatives: [] };
   }
-  const ranked = candidates.map((candidate) => ({ candidate, ...scoreCandidate(product, candidate) }))
+  const exact = exactPathRecommendation(productInfo, catalog);
+  if (exact) return exact;
+  const ranked = candidates.map((candidate) => ({ candidate, ...scoreCandidate(productInfo, candidate) }))
     .sort((left, right) => right.score - left.score || left.candidate.name.localeCompare(right.candidate.name));
   const best = ranked[0];
   if (!best || best.score < 35) return null;
@@ -105,7 +197,7 @@ function recommend(product, candidates, rulesByCategory) {
   return {
     category: best.candidate,
     confidence,
-    method: "keyword_path_v1",
+    method: "full_path_keyword_v2",
     evidence,
     ruleKeywords: best.ruleKeywords,
     alternatives: ranked.slice(1, 3).map((entry) => ({ id: entry.candidate.id, name: entry.candidate.name, path: entry.candidate.path, confidence: entry.score, evidence: entry.evidence, keywords: entry.ruleKeywords })),
@@ -164,7 +256,7 @@ async function runMatching(pool) {
       for (const product of products) {
         const result = recommend(product, candidates, rules);
         if (!result) {
-          await pool.query("UPDATE market_products SET category_match_status='unmatched',category_match_method='keyword_path_v1',category_matched_at=NOW() WHERE plid=$1", [product.plid]);
+          await pool.query("UPDATE market_products SET category_match_status='unmatched',category_match_method='full_path_keyword_v2',category_matched_at=NOW() WHERE plid=$1", [product.plid]);
         } else {
           const allCandidates = [{ id: result.category.id, name: result.category.name, path: result.category.path, confidence: result.confidence, evidence: result.evidence, keywords: result.ruleKeywords || [] }, ...result.alternatives];
           await pool.query(
@@ -253,10 +345,23 @@ export async function confirmCategoryMatch(pool, plid, input = {}) {
     [categoryId || product.recommended_category_id],
   )).rows[0];
   if (!category) throw new Error("Current level-3 category not found");
+  const requestedPath = Array.isArray(input.category_path) && input.category_path.length
+    ? input.category_path
+    : (text(category.id) === text(product.recommended_category_id) ? product.recommended_category_path : []);
+  let chosenPath = category.path;
+  if (Array.isArray(requestedPath) && requestedPath.length) {
+    const validPath = (await pool.query(
+      `SELECT full_path FROM market_category_paths
+       WHERE canonical_category_id=$1 AND source='seller_portal' AND is_current=TRUE AND is_excluded=FALSE
+         AND full_path=$2::jsonb LIMIT 1`,
+      [category.id, JSON.stringify(requestedPath)],
+    )).rows[0];
+    if (validPath?.full_path) chosenPath = validPath.full_path;
+  }
   let ruleId = null;
   const keywords = Array.isArray(input.keywords) ? [...new Set(input.keywords.map(normalizeToken).filter(Boolean))].slice(0, 8) : [];
   const originalLeaf = normalizeToken(pathNames(product.original_category_path).at(-1));
-  const currentLeaf = normalizeToken(pathNames(category.path).at(-1));
+  const currentLeaf = normalizeToken(pathNames(chosenPath).at(-1));
   const safeWholeLegacyMapping = Number(product.category_match_confidence || 0) >= 95 && originalLeaf && originalLeaf === currentLeaf;
   if (input.save_rule === true && (keywords.length || safeWholeLegacyMapping)) {
     ruleId = (await pool.query(
@@ -270,10 +375,10 @@ export async function confirmCategoryMatch(pool, plid, input = {}) {
     `UPDATE market_products SET current_category_id=$2,current_category_path=$3::jsonb,category_match_status='confirmed',
        category_match_confidence=100,category_match_method='manual_confirmation',category_match_rule_id=$4,category_confirmed_at=NOW()
      WHERE plid=$1`,
-    [plid,category.id,JSON.stringify(category.path),ruleId],
+    [plid,category.id,JSON.stringify(chosenPath),ruleId],
   );
   await refreshMatchState(pool);
-  return { ok: true, plid, current_category_id: category.id, current_category_path: category.path, rule_saved: Boolean(ruleId), rule_id: ruleId };
+  return { ok: true, plid, current_category_id: category.id, current_category_path: chosenPath, rule_saved: Boolean(ruleId), rule_id: ruleId };
 }
 
 export function categoryMatchBand(confidence) { return band(Number(confidence || 0)); }

@@ -44,3 +44,134 @@ test("downgrades equally scored categories on different paths to calibration", (
   assert.match(result?.evidence.join(" ") || "", /同分或近似同分/);
   assert.equal(result?.alternatives[0]?.confidence, 98);
 });
+
+test("restores the hidden department and exactly matches a storefront breadcrumb", () => {
+  const product = {
+    title: "28 inch Body Wave Lace Front Wig",
+    original_category_path: [
+      { name: "Beauty" },
+      { name: "Hair Care" },
+      { name: "Wigs" },
+    ],
+  };
+  const fullPathCandidates = [
+    {
+      id: "hair-care",
+      name: "Hair Care",
+      path_id: "wigs-path",
+      leaf_name: "Wigs",
+      path: [
+        { name: "Personal & Lifestyle" },
+        { name: "Beauty" },
+        { name: "Hair Care" },
+        { name: "Wigs" },
+      ],
+    },
+    {
+      id: "hair-care",
+      name: "Hair Care",
+      path_id: "wig-accessories-path",
+      leaf_name: "Hair Extension & Wig Accessories",
+      path: [
+        { name: "Personal & Lifestyle" },
+        { name: "Beauty" },
+        { name: "Hair Care" },
+        { name: "Hair Styling Accessories" },
+        { name: "Hair Extension & Wig Accessories" },
+      ],
+    },
+  ];
+  const result = recommendCategoryForProduct(product, fullPathCandidates);
+  assert.equal(result?.category.path_id, "wigs-path");
+  assert.equal(result?.confidence, 99);
+  assert.equal(result?.method, "storefront_path_exact_v2");
+  assert.equal(result?.category.path.at(0).name, "Personal & Lifestyle");
+  assert.equal(result?.category.path.at(-1).name, "Wigs");
+});
+
+test("expands the seller portal combined third-column path before matching", () => {
+  const product = {
+    title: "Natural Black Wig",
+    original_category_path: [
+      { name: "Beauty" },
+      { name: "Hair Care -> Wigs" },
+    ],
+  };
+  const fullPathCandidates = [{
+    id: "hair-care",
+    name: "Hair Care",
+    path_id: "wigs-path",
+    leaf_name: "Wigs",
+    path: [
+      { name: "Personal & Lifestyle" },
+      { name: "Beauty" },
+      { name: "Hair Care" },
+      { name: "Wigs" },
+    ],
+  }];
+  const result = recommendCategoryForProduct(product, fullPathCandidates);
+  assert.equal(result?.category.path_id, "wigs-path");
+  assert.equal(result?.confidence, 99);
+});
+
+test("uses fourth-level leaves such as Vacuum Sealers as real matching evidence", () => {
+  const product = {
+    title: "Automatic Food Vacuum Sealer",
+    original_category_path: [
+      { name: "Small Appliances" },
+      { name: "Kitchen Appliances" },
+      { name: "Vacuum Sealers" },
+    ],
+  };
+  const fullPathCandidates = [{
+    id: "kitchen-appliances",
+    name: "Kitchen Appliances",
+    path_id: "vacuum-sealers-path",
+    leaf_name: "Vacuum Sealers",
+    path: [
+      { name: "HomeSmall Appliances" },
+      { name: "Small Appliances" },
+      { name: "Kitchen Appliances" },
+      { name: "Vacuum Sealers" },
+    ],
+  }];
+  const result = recommendCategoryForProduct(product, fullPathCandidates);
+  assert.equal(result?.category.path_id, "vacuum-sealers-path");
+  assert.equal(result?.confidence, 99);
+});
+
+test("maps the legacy Controllers leaf to the deeper Game Controllers path using title context", () => {
+  const product = {
+    title: "Wireless Gaming Controller for PS4 Console",
+    original_category_path: [{ name: "Controllers" }],
+  };
+  const fullPathCandidates = [
+    {
+      id: "gaming-input-devices",
+      name: "Input Devices",
+      path_id: "game-controllers-path",
+      leaf_name: "Game Controllers",
+      path: [
+        { name: "Consumer Electronics" },
+        { name: "Gaming" },
+        { name: "Input Devices" },
+        { name: "Game Controllers" },
+      ],
+    },
+    {
+      id: "musical-instruments",
+      name: "Musical Instruments",
+      path_id: "midi-controllers-path",
+      leaf_name: "MIDI Controllers",
+      path: [
+        { name: "Consumer Electronics" },
+        { name: "Musical Instruments" },
+        { name: "Electronic Musical Instruments" },
+        { name: "MIDI Controllers" },
+      ],
+    },
+  ];
+  const result = recommendCategoryForProduct(product, fullPathCandidates);
+  assert.equal(result?.category.path_id, "game-controllers-path");
+  assert.ok((result?.confidence || 0) >= 95);
+});
